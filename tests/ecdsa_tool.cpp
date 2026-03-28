@@ -9,7 +9,7 @@
  */
 
 #include <number/ecdsa.hpp>
-#include <number/sha384.hpp>
+#include <number/sha2.hpp>
 #include <asn1/pem.hpp>
 #include <asn1/parser.hpp>
 #include <asn1/der/codegen.hpp>

@@ -13,7 +13,7 @@
 
 #include "ecc.hpp"
 #include "hmac.hpp"
-#include "sha256.hpp"
+#include "sha2.hpp"
 #include <array>
 #include <cstdint>
 #include <span>
