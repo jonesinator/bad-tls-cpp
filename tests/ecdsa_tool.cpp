@@ -1,13 +1,16 @@
 /**
- * CLI tool for ECDSA sign/verify using P-256 or P-384, for interop testing with OpenSSL.
+ * CLI tool for ECDSA sign/verify and ECDH key agreement using P-256 or P-384,
+ * for interop testing with OpenSSL.
  *
  * The curve is auto-detected from the key's private key byte length.
  *
  * Usage:
  *   ecdsa_tool sign <pem_key_file> <message_file> <output_sig_der>
  *   ecdsa_tool verify <pem_key_file> <message_file> <input_sig_der>
+ *   ecdsa_tool derive <pem_key_file> <peer_pub_pem> <output_secret_bin>
  */
 
+#include <number/ecdh.hpp>
 #include <number/ecdsa.hpp>
 #include <number/sha2.hpp>
 #include <asn1/pem.hpp>
@@ -168,18 +171,73 @@ static int do_verify(const char* key_path, const char* msg_path, const char* sig
     }
 }
 
+static int do_derive(const char* key_path, const char* peer_pub_path, const char* out_path) {
+    auto pem = read_text(key_path);
+    auto key = asn1::pem::decode_to<Mod, Mod.find_type("ECPrivateKey")>(pem);
+
+    auto peer_pem = read_text(peer_pub_path);
+    auto spki = asn1::pem::decode_to<Mod, Mod.find_type("SubjectPublicKeyInfo")>(peer_pem);
+    auto& pub_bits = spki.get<"subjectPublicKey">().bytes;
+
+    switch (detect_curve(key.get<"privateKey">().bytes)) {
+    case curve_type::p256: {
+        auto d = uint512::from_bytes(key.get<"privateKey">().bytes);
+        auto pub_span = std::span<const uint8_t>(pub_bits);
+        auto x = uint512::from_bytes(pub_span.subspan(1, 32));
+        auto y = uint512::from_bytes(pub_span.subspan(33, 32));
+        p256_point peer_Q{p256_fe{x}, p256_fe{y}};
+
+        auto secret = ecdh_raw_shared_secret<p256_curve>(d, peer_Q);
+        if (!secret) {
+            std::fputs("ECDH derivation failed (point at infinity)\n", stderr);
+            return 1;
+        }
+        auto bytes = secret->to_bytes(std::endian::big);
+        // Strip leading padding to get 32-byte output
+        std::vector<uint8_t> out(bytes.end() - 32, bytes.end());
+        write_file(out_path, out);
+        std::printf("derived 32-byte shared secret -> %s\n", out_path);
+        break;
+    }
+    case curve_type::p384: {
+        auto d = uint768::from_bytes(key.get<"privateKey">().bytes);
+        auto pub_span = std::span<const uint8_t>(pub_bits);
+        auto x = uint768::from_bytes(pub_span.subspan(1, 48));
+        auto y = uint768::from_bytes(pub_span.subspan(49, 48));
+        p384_point peer_Q{p384_fe{x}, p384_fe{y}};
+
+        auto secret = ecdh_raw_shared_secret<p384_curve>(d, peer_Q);
+        if (!secret) {
+            std::fputs("ECDH derivation failed (point at infinity)\n", stderr);
+            return 1;
+        }
+        auto bytes = secret->to_bytes(std::endian::big);
+        // Strip leading padding to get 48-byte output
+        std::vector<uint8_t> out(bytes.end() - 48, bytes.end());
+        write_file(out_path, out);
+        std::printf("derived 48-byte shared secret -> %s\n", out_path);
+        break;
+    }
+    }
+
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    if (argc != 5) {
-        std::fprintf(stderr, "usage: %s sign|verify <pem_key> <message> <signature.der>\n",
-                     argv[0]);
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: %s sign|verify|derive ...\n", argv[0]);
         return 2;
     }
 
-    if (std::strcmp(argv[1], "sign") == 0)
+    if (std::strcmp(argv[1], "sign") == 0 && argc == 5)
         return do_sign(argv[2], argv[3], argv[4]);
-    if (std::strcmp(argv[1], "verify") == 0)
+    if (std::strcmp(argv[1], "verify") == 0 && argc == 5)
         return do_verify(argv[2], argv[3], argv[4]);
+    if (std::strcmp(argv[1], "derive") == 0 && argc == 5)
+        return do_derive(argv[2], argv[3], argv[4]);
 
-    std::fprintf(stderr, "unknown command: %s\n", argv[1]);
+    std::fprintf(stderr, "usage: %s sign|verify <pem_key> <message> <signature.der>\n"
+                         "       %s derive <pem_key> <peer_pub_pem> <output_secret>\n",
+                         argv[0], argv[0]);
     return 2;
 }

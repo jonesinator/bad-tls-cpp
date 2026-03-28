@@ -183,6 +183,58 @@ check_fail "P-384 wrong message rejected by openssl" \
     openssl dgst -sha384 -verify "$WORK/pub3.pem" -signature "$WORK/sig_neg384.der" "$WORK/msg3.bin"
 
 # =========================================================================
+printf "\n=== Test suite: ECDH P-256 ===\n"
+# =========================================================================
+
+# Generate two P-256 keypairs for ECDH
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/ecdh_a.pem" 2>/dev/null
+openssl ec -in "$WORK/ecdh_a.pem" -pubout -out "$WORK/ecdh_a_pub.pem" 2>/dev/null
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/ecdh_b.pem" 2>/dev/null
+openssl ec -in "$WORK/ecdh_b.pem" -pubout -out "$WORK/ecdh_b_pub.pem" 2>/dev/null
+
+# OpenSSL derives shared secrets from both sides
+openssl pkeyutl -derive -inkey "$WORK/ecdh_a.pem" -peerkey "$WORK/ecdh_b_pub.pem" -out "$WORK/ecdh_ossl_ab.bin" 2>/dev/null
+openssl pkeyutl -derive -inkey "$WORK/ecdh_b.pem" -peerkey "$WORK/ecdh_a_pub.pem" -out "$WORK/ecdh_ossl_ba.bin" 2>/dev/null
+
+check "P-256 openssl A*B == openssl B*A" cmp "$WORK/ecdh_ossl_ab.bin" "$WORK/ecdh_ossl_ba.bin"
+
+# Library derives shared secrets from both sides
+"$TOOL" derive "$WORK/ecdh_a.pem" "$WORK/ecdh_b_pub.pem" "$WORK/ecdh_lib_ab.bin" >/dev/null
+"$TOOL" derive "$WORK/ecdh_b.pem" "$WORK/ecdh_a_pub.pem" "$WORK/ecdh_lib_ba.bin" >/dev/null
+
+check "P-256 library A*B == library B*A" cmp "$WORK/ecdh_lib_ab.bin" "$WORK/ecdh_lib_ba.bin"
+
+# Cross-compare: library matches OpenSSL
+check "P-256 library A*B == openssl A*B" cmp "$WORK/ecdh_lib_ab.bin" "$WORK/ecdh_ossl_ab.bin"
+check "P-256 library B*A == openssl B*A" cmp "$WORK/ecdh_lib_ba.bin" "$WORK/ecdh_ossl_ba.bin"
+
+# =========================================================================
+printf "\n=== Test suite: ECDH P-384 ===\n"
+# =========================================================================
+
+# Generate two P-384 keypairs for ECDH
+openssl ecparam -name secp384r1 -genkey -noout -out "$WORK/ecdh384_a.pem" 2>/dev/null
+openssl ec -in "$WORK/ecdh384_a.pem" -pubout -out "$WORK/ecdh384_a_pub.pem" 2>/dev/null
+openssl ecparam -name secp384r1 -genkey -noout -out "$WORK/ecdh384_b.pem" 2>/dev/null
+openssl ec -in "$WORK/ecdh384_b.pem" -pubout -out "$WORK/ecdh384_b_pub.pem" 2>/dev/null
+
+# OpenSSL derives shared secrets from both sides
+openssl pkeyutl -derive -inkey "$WORK/ecdh384_a.pem" -peerkey "$WORK/ecdh384_b_pub.pem" -out "$WORK/ecdh384_ossl_ab.bin" 2>/dev/null
+openssl pkeyutl -derive -inkey "$WORK/ecdh384_b.pem" -peerkey "$WORK/ecdh384_a_pub.pem" -out "$WORK/ecdh384_ossl_ba.bin" 2>/dev/null
+
+check "P-384 openssl A*B == openssl B*A" cmp "$WORK/ecdh384_ossl_ab.bin" "$WORK/ecdh384_ossl_ba.bin"
+
+# Library derives shared secrets from both sides
+"$TOOL" derive "$WORK/ecdh384_a.pem" "$WORK/ecdh384_b_pub.pem" "$WORK/ecdh384_lib_ab.bin" >/dev/null
+"$TOOL" derive "$WORK/ecdh384_b.pem" "$WORK/ecdh384_a_pub.pem" "$WORK/ecdh384_lib_ba.bin" >/dev/null
+
+check "P-384 library A*B == library B*A" cmp "$WORK/ecdh384_lib_ab.bin" "$WORK/ecdh384_lib_ba.bin"
+
+# Cross-compare: library matches OpenSSL
+check "P-384 library A*B == openssl A*B" cmp "$WORK/ecdh384_lib_ab.bin" "$WORK/ecdh384_ossl_ab.bin"
+check "P-384 library B*A == openssl B*A" cmp "$WORK/ecdh384_lib_ba.bin" "$WORK/ecdh384_ossl_ba.bin"
+
+# =========================================================================
 printf "\n=== Results ===\n"
 # =========================================================================
 

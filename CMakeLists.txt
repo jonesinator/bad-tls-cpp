@@ -27,6 +27,7 @@ add_asn1_test(test_der_codegen)
 add_asn1_test(test_pem)
 add_asn1_test(test_ecc)
 add_asn1_test(test_ecdsa)
+add_asn1_test(test_ecdh)
 
 add_executable(ecdsa_tool tests/ecdsa_tool.cpp)
 target_link_libraries(ecdsa_tool PRIVATE asn1)
