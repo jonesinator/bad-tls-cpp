@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# ECDSA P-256/SHA-256 and P-384/SHA-384 interop tests between this library and OpenSSL.
+# ECDSA/ECDH/RSA-PSS interop tests between this library and OpenSSL.
 #
 # Proves bidirectional compatibility:
 #   1. OpenSSL signs, this library verifies
 #   2. This library signs, OpenSSL verifies
 #
-# Also tests with multiple messages and a freshly generated key.
+# Also tests with multiple messages and freshly generated keys.
 
 set -euo pipefail
 
@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 TOOL="$BUILD_DIR/ecdsa_tool"
+RSA_TOOL="$BUILD_DIR/rsa_tool"
 WORK="$(mktemp -d)"
 
 trap 'rm -rf "$WORK"' EXIT
@@ -45,9 +46,9 @@ check_fail() {
 
 # --- Build ---
 
-printf "Building ecdsa_tool...\n"
+printf "Building tools...\n"
 cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1
-cmake --build "$BUILD_DIR" --target ecdsa_tool >/dev/null 2>&1
+cmake --build "$BUILD_DIR" --target ecdsa_tool --target rsa_tool >/dev/null 2>&1
 printf "Build OK.\n\n"
 
 # --- Key 1: the hardcoded test key ---
@@ -233,6 +234,47 @@ check "P-384 library A*B == library B*A" cmp "$WORK/ecdh384_lib_ab.bin" "$WORK/e
 # Cross-compare: library matches OpenSSL
 check "P-384 library A*B == openssl A*B" cmp "$WORK/ecdh384_lib_ab.bin" "$WORK/ecdh384_ossl_ab.bin"
 check "P-384 library B*A == openssl B*A" cmp "$WORK/ecdh384_lib_ba.bin" "$WORK/ecdh384_ossl_ba.bin"
+
+# =========================================================================
+printf "\n=== Test suite: RSA-PSS 2048 ===\n"
+# =========================================================================
+
+openssl genrsa -out "$WORK/rsa_key.pem" 2048 2>/dev/null
+openssl rsa -in "$WORK/rsa_key.pem" -pubout -out "$WORK/rsa_pub.pem" 2>/dev/null
+
+for i in 1 2 3 4; do
+    msg="$WORK/msg${i}.bin"
+    tag="rsa2048/msg${i}"
+
+    # OpenSSL signs PSS -> library verifies
+    openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+        -sign "$WORK/rsa_key.pem" -out "$WORK/rsa_sig_ossl.bin" "$msg"
+    check "$tag: openssl PSS signs, library verifies" \
+        "$RSA_TOOL" verify "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_ossl.bin"
+
+    # Library signs PSS -> OpenSSL verifies
+    "$RSA_TOOL" sign "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_lib.bin" >/dev/null
+    check "$tag: library PSS signs, openssl verifies" \
+        openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+            -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_sig_lib.bin" "$msg"
+
+    # Library signs -> library verifies
+    check "$tag: library PSS signs, library verifies" \
+        "$RSA_TOOL" verify "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_lib.bin"
+done
+
+# =========================================================================
+printf "\n=== Test suite: RSA-PSS negative cases ===\n"
+# =========================================================================
+
+# Sign msg1 with RSA key, try to verify against msg3 (wrong message)
+"$RSA_TOOL" sign "$WORK/rsa_key.pem" "$WORK/msg1.bin" "$WORK/rsa_sig_neg.bin" >/dev/null
+check_fail "RSA-PSS wrong message rejected by library" \
+    "$RSA_TOOL" verify "$WORK/rsa_key.pem" "$WORK/msg3.bin" "$WORK/rsa_sig_neg.bin"
+
+check_fail "RSA-PSS wrong message rejected by openssl" \
+    openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+        -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_sig_neg.bin" "$WORK/msg3.bin"
 
 # =========================================================================
 printf "\n=== Results ===\n"

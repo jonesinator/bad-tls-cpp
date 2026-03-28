@@ -18,7 +18,7 @@ Header-only library. No `.cpp` source files — only headers under `include/` an
 
 Two independent module trees sharing no code:
 - **`include/asn1/`** — ASN.1 parsing and DER encoding. Pipeline: lexer → parser → AST → DER codegen → PEM.
-- **`include/number/`** — Cryptographic math. Pipeline: big integers → field elements → curve points → ECDSA/ECDH, plus SHA-2 → HMAC → HKDF, plus AES → GCM authenticated encryption.
+- **`include/number/`** — Cryptographic math. Pipeline: big integers → field elements → curve points → ECDSA/ECDH, plus SHA-2 → HMAC → HKDF → TLS PRF, plus AES → GCM authenticated encryption, plus RSA-PSS signatures.
 
 The `number/` headers are also available at `/home/aaron/projects/number` as a separate working directory.
 

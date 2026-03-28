@@ -34,6 +34,8 @@ asn1/
 │       ├── hkdf.hpp             # HKDF (RFC 5869)
 │       ├── aes.hpp              # AES block cipher (FIPS 197)
 │       ├── gcm.hpp              # GCM authenticated encryption (SP 800-38D)
+│       ├── tls_prf.hpp          # TLS 1.2 PRF (RFC 5246)
+│       ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
 │       ├── hash_concept.hpp     # Hash function concept
 │       └── block_cipher_concept.hpp  # Block cipher concept
 └── tests/                       # Comprehensive test suite
@@ -142,6 +144,14 @@ Generic implementations templated on any type satisfying the `hash_function` con
 
 Complete FIPS 197 AES block cipher as a template `aes_state<KeyBits>` supporting AES-128, AES-192, and AES-256. The S-box, inverse S-box, and round constants are computed at compile time from first principles via GF(2^8) arithmetic (multiplicative inverse + affine transform). Interface: `init(key)` → `encrypt_block(plaintext)` / `decrypt_block(ciphertext)`. Convenience aliases `aes128`, `aes192`, `aes256` and one-shot `aes_encrypt<KeyBits>()`/`aes_decrypt<KeyBits>()` functions.
 
+### TLS 1.2 PRF (`tls_prf.hpp`)
+
+TLS 1.2 pseudorandom function per RFC 5246 Section 5. `p_hash<THash, L>()` iterates HMAC to produce `L` bytes of output via the A(i) chain. `tls_prf<THash, L>()` prepends the label to the seed and calls `p_hash`. Templated on any `hash_function` — SHA-256 for the default TLS 1.2 cipher suites, SHA-384 for AES-256 suites.
+
+### RSA-PSS (`rsa.hpp`)
+
+RSA-PSS (RSASSA-PSS) signature signing and verification per RFC 8017. Implements MGF1 mask generation, EMSA-PSS encoding/verification, and the full RSASSA-PSS sign/verify pipeline. Templated on `TNum` (big integer type, must be double the modulus width for intermediate product safety) and `THash` (any `hash_function`). Salt is caller-supplied for signing. Standard configurations: RSA-2048/SHA-256 with `number<uint32_t, 128>`, RSA-4096/SHA-384 with `number<uint32_t, 256>`.
+
 ### GCM (`gcm.hpp`)
 
 GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation.
@@ -167,8 +177,11 @@ The test suite is comprehensive:
 | `test_ecdh.cpp` | Keypair derivation, validation, shared secret, HKDF integration |
 | `test_aes.cpp` | AES-128/192/256 FIPS 197 test vectors, encrypt/decrypt roundtrip, compile-time verification |
 | `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
-| `ecdsa_tool.cpp` | Standalone ECDSA utility |
-| `test_openssl_interop.sh` | Shell script verifying signatures/keys work with OpenSSL CLI |
+| `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
+| `test_rsa.cpp` | RSA-PSS sign/verify with 1024-bit test key, known-signature verification, negative tests |
+| `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
+| `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
+| `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, and RSA-PSS work with OpenSSL CLI |
 
 ## Build
 

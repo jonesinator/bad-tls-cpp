@@ -30,6 +30,13 @@ add_asn1_test(test_ecdsa)
 add_asn1_test(test_ecdh)
 add_asn1_test(test_aes)
 add_asn1_test(test_gcm)
+add_asn1_test(test_tls_prf)
+add_asn1_test(test_rsa)
+
+add_executable(rsa_tool tests/rsa_tool.cpp)
+target_link_libraries(rsa_tool PRIVATE asn1)
+target_include_directories(rsa_tool PRIVATE ${CMAKE_SOURCE_DIR})
+target_compile_options(rsa_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} -fconstexpr-ops-limit=1000000000)
 
 add_executable(ecdsa_tool tests/ecdsa_tool.cpp)
 target_link_libraries(ecdsa_tool PRIVATE asn1)
