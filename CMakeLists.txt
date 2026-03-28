@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.30)
+project(asn1 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+add_library(asn1 INTERFACE)
+target_include_directories(asn1 INTERFACE include)
+
+enable_testing()
+
+function(add_asn1_test name)
+    add_executable(${name} tests/${name}.cpp)
+    target_link_libraries(${name} PRIVATE asn1)
+    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR})
+    target_compile_options(${name} PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+add_asn1_test(test_fixed_containers)
+add_asn1_test(test_lexer)
+add_asn1_test(test_parser)
+add_asn1_test(test_der_primitives)
+add_asn1_test(test_der_codegen)
+add_asn1_test(test_pem)

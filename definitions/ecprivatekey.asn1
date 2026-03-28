@@ -1,0 +1,49 @@
+-- Consolidated ASN.1 definitions for ECC key structures
+-- Based on RFC 5915, RFC 5480, RFC 5958, RFC 5280
+
+ECCKeyStructures DEFINITIONS EXPLICIT TAGS ::= BEGIN
+
+-- RFC 5280: AlgorithmIdentifier
+AlgorithmIdentifier ::= SEQUENCE {
+    algorithm   OBJECT IDENTIFIER,
+    parameters  ANY DEFINED BY algorithm OPTIONAL
+}
+
+-- RFC 5480: SubjectPublicKeyInfo
+SubjectPublicKeyInfo ::= SEQUENCE {
+    algorithm       AlgorithmIdentifier,
+    subjectPublicKey BIT STRING
+}
+
+-- RFC 5480: ECParameters (used in AlgorithmIdentifier.parameters)
+ECParameters ::= CHOICE {
+    namedCurve      OBJECT IDENTIFIER
+}
+
+-- RFC 5915: ECPrivateKey
+ECPrivateKey ::= SEQUENCE {
+    version        INTEGER { ecPrivkeyVer1(1) },
+    privateKey     OCTET STRING,
+    parameters     [0] EXPLICIT ECParameters OPTIONAL,
+    publicKey      [1] EXPLICIT BIT STRING OPTIONAL
+}
+
+-- RFC 5958: OneAsymmetricKey (PKCS#8)
+OneAsymmetricKey ::= SEQUENCE {
+    version                   INTEGER,
+    privateKeyAlgorithm       AlgorithmIdentifier,
+    privateKey                OCTET STRING,
+    attributes            [0] IMPLICIT SET OF AttributeValue OPTIONAL,
+    publicKey             [1] IMPLICIT BIT STRING OPTIONAL
+}
+
+-- Placeholder for attributes
+AttributeValue ::= OCTET STRING
+
+-- ECDSA-Sig-Value from RFC 3279
+ECDSA-Sig-Value ::= SEQUENCE {
+    r  INTEGER,
+    s  INTEGER
+}
+
+END
