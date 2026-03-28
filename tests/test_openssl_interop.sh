@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# ECDSA P-256 interop test between this library and OpenSSL.
+# ECDSA P-256/SHA-256 and P-384/SHA-384 interop tests between this library and OpenSSL.
 #
 # Proves bidirectional compatibility:
 #   1. OpenSSL signs, this library verifies
@@ -61,10 +61,15 @@ jMWwbEFkrrjsCG4+H2avHOsSky5iNHfRvA==
 EOF
 openssl ec -in "$WORK/key1.pem" -pubout -out "$WORK/pub1.pem" 2>/dev/null
 
-# --- Key 2: freshly generated ---
+# --- Key 2: freshly generated P-256 ---
 
 openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/key2.pem" 2>/dev/null
 openssl ec -in "$WORK/key2.pem" -pubout -out "$WORK/pub2.pem" 2>/dev/null
+
+# --- Key 3: freshly generated P-384 ---
+
+openssl ecparam -name secp384r1 -genkey -noout -out "$WORK/key3.pem" 2>/dev/null
+openssl ec -in "$WORK/key3.pem" -pubout -out "$WORK/pub3.pem" 2>/dev/null
 
 # --- Test messages ---
 
@@ -124,10 +129,37 @@ for i in 1 2 3 4; do
 done
 
 # =========================================================================
+printf "\n=== Test suite: P-384 fresh key ===\n"
+# =========================================================================
+
+for i in 1 2 3 4; do
+    msg="$WORK/msg${i}.bin"
+    tag="key3/msg${i}"
+
+    # OpenSSL signs -> library verifies
+    openssl dgst -sha384 -sign "$WORK/key3.pem" -out "$WORK/sig_ossl.der" "$msg"
+    check "$tag: openssl signs, library verifies" \
+        "$TOOL" verify "$WORK/key3.pem" "$msg" "$WORK/sig_ossl.der"
+
+    # Library signs -> OpenSSL verifies
+    "$TOOL" sign "$WORK/key3.pem" "$msg" "$WORK/sig_lib.der" >/dev/null
+    check "$tag: library signs, openssl verifies" \
+        openssl dgst -sha384 -verify "$WORK/pub3.pem" -signature "$WORK/sig_lib.der" "$msg"
+
+    # Library signs -> library verifies
+    check "$tag: library signs, library verifies" \
+        "$TOOL" verify "$WORK/key3.pem" "$msg" "$WORK/sig_lib.der"
+
+    # OpenSSL signs -> OpenSSL verifies
+    check "$tag: openssl signs, openssl verifies" \
+        openssl dgst -sha384 -verify "$WORK/pub3.pem" -signature "$WORK/sig_ossl.der" "$msg"
+done
+
+# =========================================================================
 printf "\n=== Test suite: negative cases ===\n"
 # =========================================================================
 
-# Sign msg1 with key1, try to verify against msg3 (wrong message)
+# Sign msg1 with key1 (P-256), try to verify against msg3 (wrong message)
 "$TOOL" sign "$WORK/key1.pem" "$WORK/msg1.bin" "$WORK/sig_neg.der" >/dev/null
 check_fail "wrong message rejected by library" \
     "$TOOL" verify "$WORK/key1.pem" "$WORK/msg3.bin" "$WORK/sig_neg.der"
@@ -135,12 +167,20 @@ check_fail "wrong message rejected by library" \
 check_fail "wrong message rejected by openssl" \
     openssl dgst -sha256 -verify "$WORK/pub1.pem" -signature "$WORK/sig_neg.der" "$WORK/msg3.bin"
 
-# Sign with key1, verify with key2 (wrong key)
+# Sign with key1 (P-256), verify with key2 (P-256, wrong key)
 check_fail "wrong key rejected by library" \
     "$TOOL" verify "$WORK/key2.pem" "$WORK/msg1.bin" "$WORK/sig_neg.der"
 
 check_fail "wrong key rejected by openssl" \
     openssl dgst -sha256 -verify "$WORK/pub2.pem" -signature "$WORK/sig_neg.der" "$WORK/msg1.bin"
+
+# Sign msg1 with key3 (P-384), wrong message
+"$TOOL" sign "$WORK/key3.pem" "$WORK/msg1.bin" "$WORK/sig_neg384.der" >/dev/null
+check_fail "P-384 wrong message rejected by library" \
+    "$TOOL" verify "$WORK/key3.pem" "$WORK/msg3.bin" "$WORK/sig_neg384.der"
+
+check_fail "P-384 wrong message rejected by openssl" \
+    openssl dgst -sha384 -verify "$WORK/pub3.pem" -signature "$WORK/sig_neg384.der" "$WORK/msg3.bin"
 
 # =========================================================================
 printf "\n=== Results ===\n"

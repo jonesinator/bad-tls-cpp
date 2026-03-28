@@ -1,4 +1,5 @@
 #include <number/ecdsa.hpp>
+#include <number/sha384.hpp>
 #include <asn1/pem.hpp>
 #include <asn1/parser.hpp>
 #include <asn1/der/codegen.hpp>
@@ -21,6 +22,12 @@ using uint512 = number<std::uint32_t, 16>;
 using p256_curve = p256<uint512>;
 using p256_fe = field_element<p256_curve>;
 using p256_point = point<p256_curve>;
+
+// Number and curve types for P-384
+using uint768 = number<std::uint32_t, 24>;
+using p384_curve = p384<uint768>;
+using p384_fe = field_element<p384_curve>;
+using p384_point = point<p384_curve>;
 
 // The real OpenSSL-generated P-256 key from the other tests
 constexpr std::string_view test_pem =
@@ -264,6 +271,81 @@ void test_der_roundtrip() {
     assert((ecdsa_verify<p256_curve, sha256_state>(Q, hash, sig2)));
 }
 
+// --- SHA-384 tests ---
+
+void test_sha384_abc() {
+    const uint8_t msg[] = {'a', 'b', 'c'};
+    sha384_state s;
+    s.init();
+    s.update(std::span<const uint8_t>(msg, 3));
+    auto hash = s.finalize();
+    // SHA-384("abc") = cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed
+    //                   8086072ba1e7cc2358baeca134c825a7
+    assert(hash[0] == 0xCB && hash[1] == 0x00 && hash[2] == 0x75 && hash[3] == 0x3F);
+    assert(hash[44] == 0x34 && hash[45] == 0xC8 && hash[46] == 0x25 && hash[47] == 0xA7);
+}
+
+// --- HMAC-SHA-384 tests ---
+
+void test_hmac_sha384_rfc4231_case2() {
+    // RFC 4231 Test Case 2: key = "Jefe", data = "what do ya want for nothing?"
+    const char* key = "Jefe";
+    const char* data = "what do ya want for nothing?";
+    auto mac = hmac<sha384_state>(
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(key), 4),
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data), 28));
+    // Expected: af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e
+    //           8e2240ca5e69e2c78b3239ecfab21649
+    assert(mac[0] == 0xAF && mac[1] == 0x45 && mac[2] == 0xD2 && mac[3] == 0xE3);
+    assert(mac[44] == 0xFA && mac[45] == 0xB2 && mac[46] == 0x16 && mac[47] == 0x49);
+}
+
+// --- P-384 ECDSA tests ---
+
+void test_p384_sign_verify_roundtrip() {
+    // RFC 6979 A.2.6 private key
+    auto d = *uint768::from_string(
+        "6B9D3DAD2E1B8C1C05B19875B6659F4DE23C3B667BF297BA9AA47740787137D8"
+        "96D5724E4C70A825F872C9EA60D2EDF5",
+        string_base::hexadecimal);
+
+    // Compute public key Q = d * G
+    p384_point G{p384_fe{p384_curve::gx()}, p384_fe{p384_curve::gy()}};
+    p384_point Q = G.scalar_mul(d);
+    assert(Q.on_curve());
+
+    // Hash a test message with SHA-384
+    const char* msg = "test message";
+    sha384_state hs;
+    hs.init();
+    hs.update(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
+    auto hash = hs.finalize();
+
+    // Sign and verify
+    auto sig = ecdsa_sign<p384_curve, sha384_state>(d, hash);
+    assert(sig.r != uint768(0U));
+    assert(sig.s != uint768(0U));
+
+    // Low-S check
+    uint768 half_n = p384_curve::n() / uint768(2U);
+    assert(sig.s <= half_n);
+
+    assert((ecdsa_verify<p384_curve, sha384_state>(Q, hash, sig)));
+
+    // Deterministic: signing again should produce the same signature
+    auto sig2 = ecdsa_sign<p384_curve, sha384_state>(d, hash);
+    assert(sig.r == sig2.r);
+    assert(sig.s == sig2.s);
+
+    // Wrong hash should fail
+    const char* wrong = "wrong message";
+    sha384_state hs2;
+    hs2.init();
+    hs2.update(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(wrong), 13));
+    auto wrong_hash = hs2.finalize();
+    assert((!ecdsa_verify<p384_curve, sha384_state>(Q, wrong_hash, sig)));
+}
+
 int main() {
     // SHA-256
     test_sha256_empty();
@@ -283,6 +365,15 @@ int main() {
     test_verify_openssl_signature();
     test_sign_message_convenience();
     test_der_roundtrip();
+
+    // SHA-384
+    test_sha384_abc();
+
+    // HMAC-SHA-384
+    test_hmac_sha384_rfc4231_case2();
+
+    // ECDSA P-384/SHA-384
+    test_p384_sign_verify_roundtrip();
 
     return 0;
 }

@@ -306,4 +306,57 @@ struct p256 {
     }
 };
 
+/**
+ * Curve parameters for P-384 / secp384r1 (y^2 = x^3 - 3x + b over F_p).
+ *
+ * @tparam TNumber The underlying number type. Must be wide enough to hold the product of two
+ *                 384-bit field elements (i.e. at least 768 bits).
+ */
+template <typename TNumber>
+struct p384 {
+    using number_type = TNumber;
+
+    static number_type p() {
+        return *number_type::from_string(
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE"
+            "FFFFFFFF0000000000000000FFFFFFFF",
+            string_base::hexadecimal);
+    }
+
+    static number_type a() {
+        return *number_type::from_string(
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE"
+            "FFFFFFFF0000000000000000FFFFFFFC",
+            string_base::hexadecimal);
+    }
+
+    static number_type b() {
+        return *number_type::from_string(
+            "B3312FA7E23EE7E4988E056BE3F82D19181D9C6EFE8141120314088F5013875A"
+            "C656398D8A2ED19D2A85C8EDD3EC2AEF",
+            string_base::hexadecimal);
+    }
+
+    static number_type gx() {
+        return *number_type::from_string(
+            "AA87CA22BE8B05378EB1C71EF320AD746E1D3B628BA79B9859F741E082542A38"
+            "5502F25DBF55296C3A545E3872760AB7",
+            string_base::hexadecimal);
+    }
+
+    static number_type gy() {
+        return *number_type::from_string(
+            "3617DE4A96262C6F5D9E98BF9292DC29F8F41DBD289A147CE9DA3113B5F0B8C0"
+            "0A60B1CE1D7E819D7A431D7C90EA0E5F",
+            string_base::hexadecimal);
+    }
+
+    static number_type n() {
+        return *number_type::from_string(
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF"
+            "581A0DB248B0A77AECEC196ACCC52973",
+            string_base::hexadecimal);
+    }
+};
+
 #endif /* ECC_HPP_ */
