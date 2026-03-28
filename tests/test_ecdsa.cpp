@@ -71,7 +71,7 @@ void test_hmac_sha256_rfc4231_case2() {
     // RFC 4231 Test Case 2: key = "Jefe", data = "what do ya want for nothing?"
     const char* key = "Jefe";
     const char* data = "what do ya want for nothing?";
-    auto mac = hmac_sha256(
+    auto mac = hmac<sha256_state>(
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(key), 4),
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data), 28));
     // Expected: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
@@ -108,7 +108,7 @@ void test_sign_verify_roundtrip() {
     const char* msg = "test message";
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
-    auto sig = ecdsa_sign<p256_curve>(d, hash);
+    auto sig = ecdsa_sign<p256_curve, sha256_state>(d, hash);
 
     // r and s should be non-zero
     assert(sig.r != uint512(0U));
@@ -119,7 +119,7 @@ void test_sign_verify_roundtrip() {
     assert(sig.s <= half_n);
 
     // Should verify
-    assert(ecdsa_verify<p256_curve>(Q, hash, sig));
+    assert((ecdsa_verify<p256_curve, sha256_state>(Q, hash, sig)));
 }
 
 void test_verify_rejects_wrong_message() {
@@ -128,12 +128,12 @@ void test_verify_rejects_wrong_message() {
     const char* msg = "test message";
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
-    auto sig = ecdsa_sign<p256_curve>(d, hash);
+    auto sig = ecdsa_sign<p256_curve, sha256_state>(d, hash);
 
     // Different message should fail
     const char* wrong = "wrong message";
     auto wrong_hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(wrong), 13));
-    assert(!ecdsa_verify<p256_curve>(Q, wrong_hash, sig));
+    assert((!ecdsa_verify<p256_curve, sha256_state>(Q, wrong_hash, sig)));
 }
 
 void test_verify_rejects_corrupted_signature() {
@@ -142,15 +142,15 @@ void test_verify_rejects_corrupted_signature() {
     const char* msg = "test message";
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
-    auto sig = ecdsa_sign<p256_curve>(d, hash);
+    auto sig = ecdsa_sign<p256_curve, sha256_state>(d, hash);
 
     // Corrupt r
     ecdsa_signature<p256_curve> bad_sig = {sig.r + uint512(1U), sig.s};
-    assert(!ecdsa_verify<p256_curve>(Q, hash, bad_sig));
+    assert((!ecdsa_verify<p256_curve, sha256_state>(Q, hash, bad_sig)));
 
     // Corrupt s
     bad_sig = {sig.r, sig.s + uint512(1U)};
-    assert(!ecdsa_verify<p256_curve>(Q, hash, bad_sig));
+    assert((!ecdsa_verify<p256_curve, sha256_state>(Q, hash, bad_sig)));
 }
 
 void test_verify_rejects_zero_r_s() {
@@ -160,10 +160,10 @@ void test_verify_rejects_zero_r_s() {
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
     ecdsa_signature<p256_curve> zero_r = {uint512(0U), uint512(1U)};
-    assert(!ecdsa_verify<p256_curve>(Q, hash, zero_r));
+    assert((!ecdsa_verify<p256_curve, sha256_state>(Q, hash, zero_r)));
 
     ecdsa_signature<p256_curve> zero_s = {uint512(1U), uint512(0U)};
-    assert(!ecdsa_verify<p256_curve>(Q, hash, zero_s));
+    assert((!ecdsa_verify<p256_curve, sha256_state>(Q, hash, zero_s)));
 }
 
 void test_sign_is_deterministic() {
@@ -172,8 +172,8 @@ void test_sign_is_deterministic() {
     const char* msg = "test message";
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
-    auto sig1 = ecdsa_sign<p256_curve>(d, hash);
-    auto sig2 = ecdsa_sign<p256_curve>(d, hash);
+    auto sig1 = ecdsa_sign<p256_curve, sha256_state>(d, hash);
+    auto sig2 = ecdsa_sign<p256_curve, sha256_state>(d, hash);
     assert(sig1.r == sig2.r);
     assert(sig1.s == sig2.s);
 }
@@ -207,7 +207,7 @@ void test_verify_openssl_signature() {
     const char* msg = "test message";
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
-    assert(ecdsa_verify<p256_curve>(Q, hash, sig));
+    assert((ecdsa_verify<p256_curve, sha256_state>(Q, hash, sig)));
 }
 
 void test_sign_message_convenience() {
@@ -216,8 +216,8 @@ void test_sign_message_convenience() {
     const char* msg = "hello world";
     auto msg_span = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 11);
 
-    auto sig = ecdsa_sign_message<p256_curve>(d, msg_span);
-    assert(ecdsa_verify_message<p256_curve>(Q, msg_span, sig));
+    auto sig = ecdsa_sign_message<p256_curve, sha256_state>(d, msg_span);
+    assert((ecdsa_verify_message<p256_curve, sha256_state>(Q, msg_span, sig)));
 }
 
 void test_der_roundtrip() {
@@ -226,7 +226,7 @@ void test_der_roundtrip() {
     const char* msg = "test message";
     auto hash = sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(msg), 12));
 
-    auto sig = ecdsa_sign<p256_curve>(d, hash);
+    auto sig = ecdsa_sign<p256_curve, sha256_state>(d, hash);
 
     // Convert number_type r,s to DER Integer (big-endian, minimal, unsigned -> sign-padded)
     auto num_to_integer = [](const uint512& n) -> Integer {
@@ -261,7 +261,7 @@ void test_der_roundtrip() {
 
     // Verify the decoded signature
     ecdsa_signature<p256_curve> sig2{r_decoded, s_decoded};
-    assert(ecdsa_verify<p256_curve>(Q, hash, sig2));
+    assert((ecdsa_verify<p256_curve, sha256_state>(Q, hash, sig2)));
 }
 
 int main() {

@@ -66,7 +66,7 @@ static int do_sign(const char* key_path, const char* msg_path, const char* sig_p
     auto d = uint512::from_bytes(key.get<"privateKey">().bytes);
 
     auto msg = read_file(msg_path);
-    auto sig = ecdsa_sign_message<p256_curve>(d, msg);
+    auto sig = ecdsa_sign_message<p256_curve, sha256_state>(d, msg);
 
     Type<Mod, "ECDSA-Sig-Value"> der_sig;
     der_sig.get<"r">() = num_to_integer(sig.r);
@@ -102,7 +102,7 @@ static int do_verify(const char* key_path, const char* msg_path, const char* sig
     ecdsa_signature<p256_curve> sig{r_val, s_val};
     auto hash = sha256(std::span<const uint8_t>(msg));
 
-    if (ecdsa_verify<p256_curve>(Q, hash, sig)) {
+    if (ecdsa_verify<p256_curve, sha256_state>(Q, hash, sig)) {
         std::puts("Verified OK");
         return 0;
     } else {

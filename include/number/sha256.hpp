@@ -13,34 +13,73 @@
 #include <cstdint>
 #include <span>
 
-constexpr std::array<uint32_t, 64> sha256_K = {
-    0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5,
-    0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
-    0xD807AA98, 0x12835B01, 0x243185BE, 0x550C7DC3,
-    0x72BE5D74, 0x80DEB1FE, 0x9BDC06A7, 0xC19BF174,
-    0xE49B69C1, 0xEFBE4786, 0x0FC19DC6, 0x240CA1CC,
-    0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA,
-    0x983E5152, 0xA831C66D, 0xB00327C8, 0xBF597FC7,
-    0xC6E00BF3, 0xD5A79147, 0x06CA6351, 0x14292967,
-    0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13,
-    0x650A7354, 0x766A0ABB, 0x81C2C92E, 0x92722C85,
-    0xA2BFE8A1, 0xA81A664B, 0xC24B8B70, 0xC76C51A3,
-    0xD192E819, 0xD6990624, 0xF40E3585, 0x106AA070,
-    0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5,
-    0x391C0CB3, 0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3,
-    0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208,
-    0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2,
-};
+namespace sha256_detail {
+
+consteval bool is_prime(int n) {
+    if (n < 2) return false;
+    if (n < 4) return true;
+    if (n % 2 == 0 || n % 3 == 0) return false;
+    for (int i = 5; i * i <= n; i += 6)
+        if (n % i == 0 || n % (i + 2) == 0) return false;
+    return true;
+}
+
+consteval int nth_prime(int n) {
+    int count = 0;
+    for (int c = 2;; ++c)
+        if (is_prime(c) && ++count == n) return c;
+}
+
+consteval double sqrt(double x) {
+    double g = x / 2;
+    for (int i = 0; i < 100; ++i)
+        g = (g + x / g) / 2;
+    return g;
+}
+
+consteval double cbrt(double x) {
+    double g = x / 3;
+    for (int i = 0; i < 100; ++i)
+        g = (2 * g + x / (g * g)) / 3;
+    return g;
+}
+
+consteval uint32_t frac32(double x) {
+    return static_cast<uint32_t>((x - static_cast<uint64_t>(x)) * double(1ULL << 32));
+}
+
+// First 32 bits of the fractional parts of the cube roots of the first 64 primes.
+consteval std::array<uint32_t, 64> make_K() {
+    std::array<uint32_t, 64> k{};
+    for (int i = 0; i < 64; ++i)
+        k[i] = frac32(cbrt(static_cast<double>(nth_prime(i + 1))));
+    return k;
+}
+
+// First 32 bits of the fractional parts of the square roots of the first 8 primes.
+consteval std::array<uint32_t, 8> make_H0() {
+    std::array<uint32_t, 8> h{};
+    for (int i = 0; i < 8; ++i)
+        h[i] = frac32(sqrt(static_cast<double>(nth_prime(i + 1))));
+    return h;
+}
+
+} // namespace sha256_detail
+
+constexpr std::array<uint32_t, 64> sha256_K = sha256_detail::make_K();
+constexpr std::array<uint32_t, 8> sha256_H0 = sha256_detail::make_H0();
 
 struct sha256_state {
+    static constexpr size_t block_size = 64;
+    static constexpr size_t digest_size = 32;
+
     std::array<uint32_t, 8> h;
     std::array<uint8_t, 64> buffer;
     uint8_t buffer_len = 0;
     uint64_t total_len = 0;
 
     constexpr void init() noexcept {
-        h = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-             0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
+        h = sha256_H0;
         buffer_len = 0;
         total_len = 0;
     }
