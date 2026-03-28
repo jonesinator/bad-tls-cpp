@@ -208,6 +208,80 @@ constexpr bool emsa_pss_verify(
     return true;
 }
 
+// --- PKCS#1 v1.5 DigestInfo DER prefixes (RFC 8017 Section 9.2 Note 1) ---
+
+// SHA-256: SEQUENCE { SEQUENCE { OID 2.16.840.1.101.3.4.2.1, NULL }, OCTET STRING(32) }
+inline constexpr std::array<uint8_t, 19> pkcs1_digestinfo_sha256 = {
+    0x30,0x31,0x30,0x0D,0x06,0x09,0x60,0x86,0x48,0x01,
+    0x65,0x03,0x04,0x02,0x01,0x05,0x00,0x04,0x20
+};
+
+// SHA-384: SEQUENCE { SEQUENCE { OID 2.16.840.1.101.3.4.2.2, NULL }, OCTET STRING(48) }
+inline constexpr std::array<uint8_t, 19> pkcs1_digestinfo_sha384 = {
+    0x30,0x41,0x30,0x0D,0x06,0x09,0x60,0x86,0x48,0x01,
+    0x65,0x03,0x04,0x02,0x02,0x05,0x00,0x04,0x30
+};
+
+// SHA-512: SEQUENCE { SEQUENCE { OID 2.16.840.1.101.3.4.2.3, NULL }, OCTET STRING(64) }
+inline constexpr std::array<uint8_t, 19> pkcs1_digestinfo_sha512 = {
+    0x30,0x51,0x30,0x0D,0x06,0x09,0x60,0x86,0x48,0x01,
+    0x65,0x03,0x04,0x02,0x03,0x05,0x00,0x04,0x40
+};
+
+// Select DigestInfo prefix based on hash digest size
+template <hash_function THash>
+constexpr std::span<const uint8_t> digestinfo_prefix() noexcept {
+    if constexpr (THash::digest_size == 32) return pkcs1_digestinfo_sha256;
+    else if constexpr (THash::digest_size == 48) return pkcs1_digestinfo_sha384;
+    else if constexpr (THash::digest_size == 64) return pkcs1_digestinfo_sha512;
+}
+
+// --- EMSA-PKCS1-v1_5 verification (RFC 8017 Section 9.2) ---
+
+template <hash_function THash>
+constexpr bool emsa_pkcs1_v1_5_verify(
+    const std::array<uint8_t, THash::digest_size>& mHash,
+    std::span<const uint8_t> em,
+    size_t emLen) noexcept
+{
+    constexpr size_t hLen = THash::digest_size;
+    auto prefix = digestinfo_prefix<THash>();
+    size_t tLen = prefix.size() + hLen;  // DigestInfo prefix + hash
+
+    if (emLen < tLen + 11)
+        return false;
+
+    // Work with the last emLen bytes (for double-width number types)
+    size_t base = em.size() - emLen;
+
+    // Check 0x00 0x01
+    if (em[base] != 0x00 || em[base + 1] != 0x01)
+        return false;
+
+    // Check PS (0xFF padding), must be at least 8 bytes
+    size_t ps_len = emLen - tLen - 3;
+    if (ps_len < 8)
+        return false;
+    for (size_t i = 0; i < ps_len; ++i)
+        if (em[base + 2 + i] != 0xFF) return false;
+
+    // Check 0x00 separator
+    if (em[base + 2 + ps_len] != 0x00)
+        return false;
+
+    // Check DigestInfo prefix
+    size_t di_start = base + 3 + ps_len;
+    for (size_t i = 0; i < prefix.size(); ++i)
+        if (em[di_start + i] != prefix[i]) return false;
+
+    // Check hash
+    size_t hash_start = di_start + prefix.size();
+    for (size_t i = 0; i < hLen; ++i)
+        if (em[hash_start + i] != mHash[i]) return false;
+
+    return true;
+}
+
 } // namespace rsa_detail
 
 // --- RSASSA-PSS-SIGN (RFC 8017 Section 8.1.1) ---
@@ -258,7 +332,88 @@ constexpr bool rsa_pss_verify(
         emBits, sLen);
 }
 
-// --- Message convenience wrappers ---
+// --- RSASSA-PKCS1-v1_5 SIGN (RFC 8017 Section 8.2.1) ---
+
+template <typename TNum, hash_function THash>
+constexpr rsa_signature<TNum> rsa_pkcs1_v1_5_sign(
+    const rsa_private_key<TNum>& key,
+    const std::array<uint8_t, THash::digest_size>& message_hash) noexcept
+{
+    constexpr size_t hLen = THash::digest_size;
+    auto prefix = rsa_detail::digestinfo_prefix<THash>();
+    size_t k = (key.n.bit_width() + 7) / 8;
+    size_t tLen = prefix.size() + hLen;
+
+    // Build EM = 0x00 || 0x01 || PS || 0x00 || DigestInfo
+    std::array<uint8_t, TNum::num_bytes> em{};
+    size_t base = TNum::num_bytes - k;
+    em[base] = 0x00;
+    em[base + 1] = 0x01;
+    size_t ps_len = k - tLen - 3;
+    for (size_t i = 0; i < ps_len; ++i)
+        em[base + 2 + i] = 0xFF;
+    em[base + 2 + ps_len] = 0x00;
+    for (size_t i = 0; i < prefix.size(); ++i)
+        em[base + 3 + ps_len + i] = prefix[i];
+    for (size_t i = 0; i < hLen; ++i)
+        em[base + 3 + ps_len + prefix.size() + i] = message_hash[i];
+
+    TNum m = TNum::from_bytes(em, std::endian::big);
+    TNum s = m.pow_mod(key.d, key.n);
+
+    return {s};
+}
+
+// --- RSASSA-PKCS1-v1_5 VERIFY (RFC 8017 Section 8.2.2) ---
+
+template <typename TNum, hash_function THash>
+constexpr bool rsa_pkcs1_v1_5_verify(
+    const rsa_public_key<TNum>& key,
+    const std::array<uint8_t, THash::digest_size>& message_hash,
+    const rsa_signature<TNum>& sig) noexcept
+{
+    if (sig.value >= key.n)
+        return false;
+
+    TNum m = sig.value.pow_mod(key.e, key.n);
+    auto em_bytes = m.to_bytes(std::endian::big);
+
+    size_t k = (key.n.bit_width() + 7) / 8;
+
+    return rsa_detail::emsa_pkcs1_v1_5_verify<THash>(
+        message_hash,
+        std::span<const uint8_t>(em_bytes),
+        k);
+}
+
+// --- PKCS1 v1.5 message convenience wrappers ---
+
+template <typename TNum, hash_function THash>
+constexpr rsa_signature<TNum> rsa_pkcs1_v1_5_sign_message(
+    const rsa_private_key<TNum>& key,
+    std::span<const uint8_t> message) noexcept
+{
+    THash h;
+    h.init();
+    h.update(message);
+    auto hash = h.finalize();
+    return rsa_pkcs1_v1_5_sign<TNum, THash>(key, hash);
+}
+
+template <typename TNum, hash_function THash>
+constexpr bool rsa_pkcs1_v1_5_verify_message(
+    const rsa_public_key<TNum>& key,
+    std::span<const uint8_t> message,
+    const rsa_signature<TNum>& sig) noexcept
+{
+    THash h;
+    h.init();
+    h.update(message);
+    auto hash = h.finalize();
+    return rsa_pkcs1_v1_5_verify<TNum, THash>(key, hash, sig);
+}
+
+// --- PSS message convenience wrappers ---
 
 template <typename TNum, hash_function THash>
 constexpr rsa_signature<TNum> rsa_pss_sign_message(

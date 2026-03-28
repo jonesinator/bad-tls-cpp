@@ -3,8 +3,10 @@
  * for interop testing with OpenSSL.
  *
  * Usage:
- *   rsa_tool sign   <pem_key_file> <message_file> <output_sig_bin>
- *   rsa_tool verify <pem_key_file> <message_file> <input_sig_bin>
+ *   rsa_tool sign-pss   <pem_key_file> <message_file> <output_sig_bin>
+ *   rsa_tool verify-pss <pem_key_file> <message_file> <input_sig_bin>
+ *   rsa_tool sign       <pem_key_file> <message_file> <output_sig_bin>     (PKCS#1 v1.5)
+ *   rsa_tool verify     <pem_key_file> <message_file> <input_sig_bin>      (tries both)
  *
  * Accepts both traditional RSA private key PEM (BEGIN RSA PRIVATE KEY)
  * and public key PEM (BEGIN PUBLIC KEY) formats.
@@ -145,7 +147,7 @@ static rsa_keys load_key(const char* path) {
     std::exit(1);
 }
 
-static int do_sign(const char* key_path, const char* msg_path, const char* sig_path) {
+static int do_sign_pss(const char* key_path, const char* msg_path, const char* sig_path) {
     auto keys = load_key(key_path);
     if (!keys.has_private) {
         std::fprintf(stderr, "need private key for signing\n");
@@ -174,6 +176,66 @@ static int do_sign(const char* key_path, const char* msg_path, const char* sig_p
     return 0;
 }
 
+static int do_sign_pkcs1(const char* key_path, const char* msg_path, const char* sig_path) {
+    auto keys = load_key(key_path);
+    if (!keys.has_private) {
+        std::fprintf(stderr, "need private key for signing\n");
+        return 1;
+    }
+
+    auto msg = read_file(msg_path);
+    auto mHash = sha256(std::span<const uint8_t>(msg));
+
+    rsa_private_key<rsa_num> priv{keys.n, keys.d};
+    auto sig = rsa_pkcs1_v1_5_sign<rsa_num, sha256_state>(priv, mHash);
+
+    auto sig_bytes = sig.value.to_bytes(std::endian::big);
+    size_t k = (keys.n.bit_width() + 7) / 8;
+    std::vector<uint8_t> out(sig_bytes.end() - k, sig_bytes.end());
+
+    write_file(sig_path, out);
+    std::printf("signed (PKCS1v15) %zu bytes -> %s (%zu-byte signature)\n",
+                msg.size(), sig_path, out.size());
+    return 0;
+}
+
+static int do_verify_pss(const char* key_path, const char* msg_path, const char* sig_path) {
+    auto keys = load_key(key_path);
+    auto msg = read_file(msg_path);
+    auto sig_bytes = read_file(sig_path);
+
+    auto mHash = sha256(std::span<const uint8_t>(msg));
+
+    rsa_public_key<rsa_num> pub{keys.n, keys.e};
+    rsa_signature<rsa_num> sig{rsa_num::from_bytes(sig_bytes)};
+
+    if (rsa_pss_verify<rsa_num, sha256_state>(pub, mHash, sig)) {
+        std::puts("Verified OK");
+        return 0;
+    }
+    std::puts("Verification Failure");
+    return 1;
+}
+
+static int do_verify_pkcs1(const char* key_path, const char* msg_path, const char* sig_path) {
+    auto keys = load_key(key_path);
+    auto msg = read_file(msg_path);
+    auto sig_bytes = read_file(sig_path);
+
+    auto mHash = sha256(std::span<const uint8_t>(msg));
+
+    rsa_public_key<rsa_num> pub{keys.n, keys.e};
+    rsa_signature<rsa_num> sig{rsa_num::from_bytes(sig_bytes)};
+
+    if (rsa_pkcs1_v1_5_verify<rsa_num, sha256_state>(pub, mHash, sig)) {
+        std::puts("Verified OK");
+        return 0;
+    }
+    std::puts("Verification Failure");
+    return 1;
+}
+
+// Try both PSS and PKCS#1 v1.5 verification
 static int do_verify(const char* key_path, const char* msg_path, const char* sig_path) {
     auto keys = load_key(key_path);
     auto msg = read_file(msg_path);
@@ -184,30 +246,38 @@ static int do_verify(const char* key_path, const char* msg_path, const char* sig
     rsa_public_key<rsa_num> pub{keys.n, keys.e};
     rsa_signature<rsa_num> sig{rsa_num::from_bytes(sig_bytes)};
 
-    bool ok = rsa_pss_verify<rsa_num, sha256_state>(pub, mHash, sig);
-
-    if (ok) {
+    if (rsa_pss_verify<rsa_num, sha256_state>(pub, mHash, sig) ||
+        rsa_pkcs1_v1_5_verify<rsa_num, sha256_state>(pub, mHash, sig)) {
         std::puts("Verified OK");
         return 0;
-    } else {
-        std::puts("Verification Failure");
-        return 1;
     }
+    std::puts("Verification Failure");
+    return 1;
 }
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s sign|verify ...\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <command> ...\n", argv[0]);
         return 2;
     }
 
+    if (std::strcmp(argv[1], "sign-pss") == 0 && argc == 5)
+        return do_sign_pss(argv[2], argv[3], argv[4]);
     if (std::strcmp(argv[1], "sign") == 0 && argc == 5)
-        return do_sign(argv[2], argv[3], argv[4]);
+        return do_sign_pkcs1(argv[2], argv[3], argv[4]);
+    if (std::strcmp(argv[1], "verify-pss") == 0 && argc == 5)
+        return do_verify_pss(argv[2], argv[3], argv[4]);
+    if (std::strcmp(argv[1], "verify-pkcs1") == 0 && argc == 5)
+        return do_verify_pkcs1(argv[2], argv[3], argv[4]);
     if (std::strcmp(argv[1], "verify") == 0 && argc == 5)
         return do_verify(argv[2], argv[3], argv[4]);
 
-    std::fprintf(stderr, "usage: %s sign <pem_key> <message> <signature.bin>\n"
-                         "       %s verify <pem_key_or_pub> <message> <signature.bin>\n",
-                         argv[0], argv[0]);
+    std::fprintf(stderr,
+        "usage: %s sign       <pem_key> <message> <signature.bin>  (PKCS#1 v1.5)\n"
+        "       %s sign-pss   <pem_key> <message> <signature.bin>  (PSS)\n"
+        "       %s verify     <pem_key> <message> <signature.bin>  (try both)\n"
+        "       %s verify-pss <pem_key> <message> <signature.bin>\n"
+        "       %s verify-pkcs1 <pem_key> <message> <signature.bin>\n",
+        argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 2;
 }

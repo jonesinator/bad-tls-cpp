@@ -187,12 +187,162 @@ void test_rsa_pss_message_convenience() {
     assert((rsa_pss_verify_message<rsa1024_num, sha256_state>(pub, msg_span, sig)));
 }
 
+// --- PKCS#1 v1.5 sign/verify roundtrip ---
+
+void test_pkcs1_v1_5_roundtrip() {
+    auto n = *rsa1024_num::from_string(
+        "b51ed41adb68167cd17edf321607d47e58e3089587c9ad26e3aa962051cb2758"
+        "7d578731fc83bfe14da0c5c99b64daf43ab0d3575d6ff3019b92a253b03b8cdb"
+        "5ade3b5d09bbe2cf3c4da42c4db800b96d6e7e2cc826974172cd413a71b18095"
+        "bb218e182054ef31fc4c8a4d0507d17ef2b0fd5657eadd2a8bfba001b6a55ad7",
+        string_base::hexadecimal);
+    auto e = rsa1024_num(65537U);
+    auto d = *rsa1024_num::from_string(
+        "2e89cad751cc17871fef591b4e04da0952fe971c90e4f5bc59e061add1468188"
+        "1fc0c748c548f71b45ae8b53c7bd6cf337476b2e7620475100eff70cc8ea2c41"
+        "5bef5753af9e3b9c84771248a3ccb946e15444bd30f7cd9d0fd1a962a55ed370"
+        "b395de506b09bfe588144f5ab790b5ca45f5994edaef2778cecc278d4d6f984d",
+        string_base::hexadecimal);
+
+    rsa_private_key<rsa1024_num> priv{n, d};
+    rsa_public_key<rsa1024_num> pub{n, e};
+
+    const char* msg = "test message";
+    auto mHash = sha256(std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(msg), 12));
+
+    auto sig = rsa_pkcs1_v1_5_sign<rsa1024_num, sha256_state>(priv, mHash);
+    assert((rsa_pkcs1_v1_5_verify<rsa1024_num, sha256_state>(pub, mHash, sig)));
+}
+
+// --- PKCS#1 v1.5 verify known signature (from PyCryptodome) ---
+
+void test_pkcs1_v1_5_known_signature() {
+    auto n = *rsa1024_num::from_string(
+        "b51ed41adb68167cd17edf321607d47e58e3089587c9ad26e3aa962051cb2758"
+        "7d578731fc83bfe14da0c5c99b64daf43ab0d3575d6ff3019b92a253b03b8cdb"
+        "5ade3b5d09bbe2cf3c4da42c4db800b96d6e7e2cc826974172cd413a71b18095"
+        "bb218e182054ef31fc4c8a4d0507d17ef2b0fd5657eadd2a8bfba001b6a55ad7",
+        string_base::hexadecimal);
+    auto e = rsa1024_num(65537U);
+
+    rsa_public_key<rsa1024_num> pub{n, e};
+
+    const char* msg = "test message";
+    auto mHash = sha256(std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(msg), 12));
+
+    auto sig_val = *rsa1024_num::from_string(
+        "38c654b5b4ba57d246e8902a4addbf00479b4e2db996300c29c3f2f863a984bd"
+        "a3b946fecfb6768a05e7001b9a84c5b97753104a7e99f985204aa164e7700340"
+        "ab0d6b539bcf81163e0b3a5aeba16d246cc7e74f7c861ee8a0d6dbc139d20438"
+        "96b34cde800d5520feb2dcc86ced39bb714c3ee3a18c40450f8bdb49440d4bb6",
+        string_base::hexadecimal);
+
+    rsa_signature<rsa1024_num> sig{sig_val};
+    assert((rsa_pkcs1_v1_5_verify<rsa1024_num, sha256_state>(pub, mHash, sig)));
+}
+
+// --- PKCS#1 v1.5 is deterministic ---
+
+void test_pkcs1_v1_5_deterministic() {
+    auto n = *rsa1024_num::from_string(
+        "b51ed41adb68167cd17edf321607d47e58e3089587c9ad26e3aa962051cb2758"
+        "7d578731fc83bfe14da0c5c99b64daf43ab0d3575d6ff3019b92a253b03b8cdb"
+        "5ade3b5d09bbe2cf3c4da42c4db800b96d6e7e2cc826974172cd413a71b18095"
+        "bb218e182054ef31fc4c8a4d0507d17ef2b0fd5657eadd2a8bfba001b6a55ad7",
+        string_base::hexadecimal);
+    auto e = rsa1024_num(65537U);
+    auto d = *rsa1024_num::from_string(
+        "2e89cad751cc17871fef591b4e04da0952fe971c90e4f5bc59e061add1468188"
+        "1fc0c748c548f71b45ae8b53c7bd6cf337476b2e7620475100eff70cc8ea2c41"
+        "5bef5753af9e3b9c84771248a3ccb946e15444bd30f7cd9d0fd1a962a55ed370"
+        "b395de506b09bfe588144f5ab790b5ca45f5994edaef2778cecc278d4d6f984d",
+        string_base::hexadecimal);
+
+    rsa_private_key<rsa1024_num> priv{n, d};
+
+    const char* msg = "test message";
+    auto mHash = sha256(std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(msg), 12));
+
+    auto sig1 = rsa_pkcs1_v1_5_sign<rsa1024_num, sha256_state>(priv, mHash);
+    auto sig2 = rsa_pkcs1_v1_5_sign<rsa1024_num, sha256_state>(priv, mHash);
+    assert(sig1.value == sig2.value);
+}
+
+// --- PKCS#1 v1.5 wrong message rejected ---
+
+void test_pkcs1_v1_5_wrong_message() {
+    auto n = *rsa1024_num::from_string(
+        "b51ed41adb68167cd17edf321607d47e58e3089587c9ad26e3aa962051cb2758"
+        "7d578731fc83bfe14da0c5c99b64daf43ab0d3575d6ff3019b92a253b03b8cdb"
+        "5ade3b5d09bbe2cf3c4da42c4db800b96d6e7e2cc826974172cd413a71b18095"
+        "bb218e182054ef31fc4c8a4d0507d17ef2b0fd5657eadd2a8bfba001b6a55ad7",
+        string_base::hexadecimal);
+    auto e = rsa1024_num(65537U);
+
+    rsa_public_key<rsa1024_num> pub{n, e};
+
+    // Known PKCS1v15 signature for "test message"
+    auto sig_val = *rsa1024_num::from_string(
+        "38c654b5b4ba57d246e8902a4addbf00479b4e2db996300c29c3f2f863a984bd"
+        "a3b946fecfb6768a05e7001b9a84c5b97753104a7e99f985204aa164e7700340"
+        "ab0d6b539bcf81163e0b3a5aeba16d246cc7e74f7c861ee8a0d6dbc139d20438"
+        "96b34cde800d5520feb2dcc86ced39bb714c3ee3a18c40450f8bdb49440d4bb6",
+        string_base::hexadecimal);
+    rsa_signature<rsa1024_num> sig{sig_val};
+
+    // Verify with wrong message
+    const char* wrong = "wrong message";
+    auto wrongHash = sha256(std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(wrong), 13));
+    assert((!rsa_pkcs1_v1_5_verify<rsa1024_num, sha256_state>(pub, wrongHash, sig)));
+}
+
+// --- PKCS#1 v1.5 message convenience ---
+
+void test_pkcs1_v1_5_message_convenience() {
+    auto n = *rsa1024_num::from_string(
+        "b51ed41adb68167cd17edf321607d47e58e3089587c9ad26e3aa962051cb2758"
+        "7d578731fc83bfe14da0c5c99b64daf43ab0d3575d6ff3019b92a253b03b8cdb"
+        "5ade3b5d09bbe2cf3c4da42c4db800b96d6e7e2cc826974172cd413a71b18095"
+        "bb218e182054ef31fc4c8a4d0507d17ef2b0fd5657eadd2a8bfba001b6a55ad7",
+        string_base::hexadecimal);
+    auto e = rsa1024_num(65537U);
+    auto d = *rsa1024_num::from_string(
+        "2e89cad751cc17871fef591b4e04da0952fe971c90e4f5bc59e061add1468188"
+        "1fc0c748c548f71b45ae8b53c7bd6cf337476b2e7620475100eff70cc8ea2c41"
+        "5bef5753af9e3b9c84771248a3ccb946e15444bd30f7cd9d0fd1a962a55ed370"
+        "b395de506b09bfe588144f5ab790b5ca45f5994edaef2778cecc278d4d6f984d",
+        string_base::hexadecimal);
+
+    rsa_private_key<rsa1024_num> priv{n, d};
+    rsa_public_key<rsa1024_num> pub{n, e};
+
+    const char* msg = "hello world";
+    auto msg_span = std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(msg), 11);
+
+    auto sig = rsa_pkcs1_v1_5_sign_message<rsa1024_num, sha256_state>(priv, msg_span);
+    assert((rsa_pkcs1_v1_5_verify_message<rsa1024_num, sha256_state>(pub, msg_span, sig)));
+}
+
 int main() {
+    // RSA-PSS tests
     test_mgf1();
     test_rsa_pss_roundtrip();
     test_rsa_pss_known_signature();
     test_rsa_pss_wrong_message();
     test_rsa_pss_corrupted_signature();
     test_rsa_pss_message_convenience();
+
+    // PKCS#1 v1.5 tests
+    test_pkcs1_v1_5_roundtrip();
+    test_pkcs1_v1_5_known_signature();
+    test_pkcs1_v1_5_deterministic();
+    test_pkcs1_v1_5_wrong_message();
+    test_pkcs1_v1_5_message_convenience();
+
     return 0;
 }

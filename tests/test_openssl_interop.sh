@@ -250,17 +250,17 @@ for i in 1 2 3 4; do
     openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
         -sign "$WORK/rsa_key.pem" -out "$WORK/rsa_sig_ossl.bin" "$msg"
     check "$tag: openssl PSS signs, library verifies" \
-        "$RSA_TOOL" verify "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_ossl.bin"
+        "$RSA_TOOL" verify-pss "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_ossl.bin"
 
     # Library signs PSS -> OpenSSL verifies
-    "$RSA_TOOL" sign "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_lib.bin" >/dev/null
+    "$RSA_TOOL" sign-pss "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_lib.bin" >/dev/null
     check "$tag: library PSS signs, openssl verifies" \
         openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
             -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_sig_lib.bin" "$msg"
 
     # Library signs -> library verifies
     check "$tag: library PSS signs, library verifies" \
-        "$RSA_TOOL" verify "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_lib.bin"
+        "$RSA_TOOL" verify-pss "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_sig_lib.bin"
 done
 
 # =========================================================================
@@ -268,13 +268,47 @@ printf "\n=== Test suite: RSA-PSS negative cases ===\n"
 # =========================================================================
 
 # Sign msg1 with RSA key, try to verify against msg3 (wrong message)
-"$RSA_TOOL" sign "$WORK/rsa_key.pem" "$WORK/msg1.bin" "$WORK/rsa_sig_neg.bin" >/dev/null
+"$RSA_TOOL" sign-pss "$WORK/rsa_key.pem" "$WORK/msg1.bin" "$WORK/rsa_sig_neg.bin" >/dev/null
 check_fail "RSA-PSS wrong message rejected by library" \
-    "$RSA_TOOL" verify "$WORK/rsa_key.pem" "$WORK/msg3.bin" "$WORK/rsa_sig_neg.bin"
+    "$RSA_TOOL" verify-pss "$WORK/rsa_key.pem" "$WORK/msg3.bin" "$WORK/rsa_sig_neg.bin"
 
 check_fail "RSA-PSS wrong message rejected by openssl" \
     openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
         -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_sig_neg.bin" "$WORK/msg3.bin"
+
+# =========================================================================
+printf "\n=== Test suite: RSA PKCS#1 v1.5 ===\n"
+# =========================================================================
+
+for i in 1 2 3 4; do
+    msg="$WORK/msg${i}.bin"
+    tag="rsa-pkcs1/msg${i}"
+
+    # OpenSSL signs PKCS#1 v1.5 -> library verifies
+    openssl dgst -sha256 -sign "$WORK/rsa_key.pem" -out "$WORK/rsa_pkcs1_ossl.bin" "$msg"
+    check "$tag: openssl PKCS1v15 signs, library verifies" \
+        "$RSA_TOOL" verify-pkcs1 "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_pkcs1_ossl.bin"
+
+    # Library signs PKCS#1 v1.5 -> OpenSSL verifies
+    "$RSA_TOOL" sign "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_pkcs1_lib.bin" >/dev/null
+    check "$tag: library PKCS1v15 signs, openssl verifies" \
+        openssl dgst -sha256 -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_pkcs1_lib.bin" "$msg"
+
+    # Library signs -> library verifies
+    check "$tag: library PKCS1v15 signs, library verifies" \
+        "$RSA_TOOL" verify-pkcs1 "$WORK/rsa_key.pem" "$msg" "$WORK/rsa_pkcs1_lib.bin"
+done
+
+# =========================================================================
+printf "\n=== Test suite: RSA PKCS#1 v1.5 negative cases ===\n"
+# =========================================================================
+
+"$RSA_TOOL" sign "$WORK/rsa_key.pem" "$WORK/msg1.bin" "$WORK/rsa_pkcs1_neg.bin" >/dev/null
+check_fail "RSA PKCS1v15 wrong message rejected by library" \
+    "$RSA_TOOL" verify-pkcs1 "$WORK/rsa_key.pem" "$WORK/msg3.bin" "$WORK/rsa_pkcs1_neg.bin"
+
+check_fail "RSA PKCS1v15 wrong message rejected by openssl" \
+    openssl dgst -sha256 -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_pkcs1_neg.bin" "$WORK/msg3.bin"
 
 # =========================================================================
 printf "\n=== Results ===\n"

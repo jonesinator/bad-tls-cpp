@@ -150,7 +150,7 @@ TLS 1.2 pseudorandom function per RFC 5246 Section 5. `p_hash<THash, L>()` itera
 
 ### RSA-PSS (`rsa.hpp`)
 
-RSA-PSS (RSASSA-PSS) signature signing and verification per RFC 8017. Implements MGF1 mask generation, EMSA-PSS encoding/verification, and the full RSASSA-PSS sign/verify pipeline. Templated on `TNum` (big integer type, must be double the modulus width for intermediate product safety) and `THash` (any `hash_function`). Salt is caller-supplied for signing. Standard configurations: RSA-2048/SHA-256 with `number<uint32_t, 128>`, RSA-4096/SHA-384 with `number<uint32_t, 256>`.
+RSA signature signing and verification per RFC 8017. Supports both **RSA-PSS** (RSASSA-PSS, Sections 8.1/9.1) and **PKCS#1 v1.5** (RSASSA-PKCS1-v1_5, Sections 8.2/9.2). PSS uses MGF1 mask generation with caller-supplied salt. PKCS#1 v1.5 uses hardcoded DigestInfo DER prefixes for SHA-256/384/512 per Section 9.2 Note 1. Templated on `TNum` (big integer type, must be double the modulus width for intermediate product safety) and `THash` (any `hash_function`). Standard configurations: RSA-2048/SHA-256 with `number<uint32_t, 128>`, RSA-4096/SHA-384 with `number<uint32_t, 256>`.
 
 ### GCM (`gcm.hpp`)
 
@@ -178,7 +178,7 @@ The test suite is comprehensive:
 | `test_aes.cpp` | AES-128/192/256 FIPS 197 test vectors, encrypt/decrypt roundtrip, compile-time verification |
 | `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
 | `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
-| `test_rsa.cpp` | RSA-PSS sign/verify with 1024-bit test key, known-signature verification, negative tests |
+| `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, and RSA-PSS work with OpenSSL CLI |
