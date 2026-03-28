@@ -57,6 +57,21 @@ enum class TokenKind : uint8_t {
     KwPrivate,
     KwUniversal,
 
+    // String types
+    KwUtf8String,
+    KwPrintableString,
+    KwIA5String,
+    KwVisibleString,
+    KwBMPString,
+    KwTeletexString,
+    KwNumericString,
+    KwUniversalString,
+    KwGeneralString,
+
+    // Time types
+    KwUtcTime,
+    KwGeneralizedTime,
+
     Eof,
 };
 
@@ -106,6 +121,17 @@ inline constexpr KeywordEntry keywords[] = {
     {"APPLICATION",       TokenKind::KwApplication},
     {"PRIVATE",           TokenKind::KwPrivate},
     {"UNIVERSAL",         TokenKind::KwUniversal},
+    {"UTF8String",        TokenKind::KwUtf8String},
+    {"PrintableString",   TokenKind::KwPrintableString},
+    {"IA5String",         TokenKind::KwIA5String},
+    {"VisibleString",     TokenKind::KwVisibleString},
+    {"BMPString",         TokenKind::KwBMPString},
+    {"TeletexString",     TokenKind::KwTeletexString},
+    {"NumericString",     TokenKind::KwNumericString},
+    {"UniversalString",   TokenKind::KwUniversalString},
+    {"GeneralString",     TokenKind::KwGeneralString},
+    {"UTCTime",           TokenKind::KwUtcTime},
+    {"GeneralizedTime",   TokenKind::KwGeneralizedTime},
 };
 
 constexpr auto classify_identifier(std::string_view text) -> TokenKind {

@@ -43,6 +43,21 @@ template <auto M, std::size_t I>
     requires (M.nodes[I].kind == AstNodeKind::OctetString)
 struct Resolve<M, I> { using type = OctetString; };
 
+// String and time types all map to OctetString (raw bytes, no charset validation)
+template <auto M, std::size_t I>
+    requires (M.nodes[I].kind == AstNodeKind::Utf8String ||
+              M.nodes[I].kind == AstNodeKind::PrintableString ||
+              M.nodes[I].kind == AstNodeKind::IA5String ||
+              M.nodes[I].kind == AstNodeKind::VisibleString ||
+              M.nodes[I].kind == AstNodeKind::BMPString ||
+              M.nodes[I].kind == AstNodeKind::TeletexString ||
+              M.nodes[I].kind == AstNodeKind::NumericString ||
+              M.nodes[I].kind == AstNodeKind::UniversalString ||
+              M.nodes[I].kind == AstNodeKind::GeneralString ||
+              M.nodes[I].kind == AstNodeKind::UtcTime ||
+              M.nodes[I].kind == AstNodeKind::GeneralizedTime)
+struct Resolve<M, I> { using type = OctetString; };
+
 template <auto M, std::size_t I>
     requires (M.nodes[I].kind == AstNodeKind::ObjectIdentifier)
 struct Resolve<M, I> { using type = ObjectIdentifier; };
@@ -231,6 +246,19 @@ void encode(Writer& w, const Mapped<M, I>& value) {
     else if constexpr (node.kind == AstNodeKind::OctetString) {
         w.write(value);
     }
+    else if constexpr (node.kind == AstNodeKind::Utf8String ||
+                       node.kind == AstNodeKind::PrintableString ||
+                       node.kind == AstNodeKind::IA5String ||
+                       node.kind == AstNodeKind::VisibleString ||
+                       node.kind == AstNodeKind::BMPString ||
+                       node.kind == AstNodeKind::TeletexString ||
+                       node.kind == AstNodeKind::NumericString ||
+                       node.kind == AstNodeKind::UniversalString ||
+                       node.kind == AstNodeKind::GeneralString ||
+                       node.kind == AstNodeKind::UtcTime ||
+                       node.kind == AstNodeKind::GeneralizedTime) {
+        w.write(value, universal_tag_number(node.kind));
+    }
     else if constexpr (node.kind == AstNodeKind::ObjectIdentifier) {
         w.write(value);
     }
@@ -300,7 +328,18 @@ void encode_implicit(Writer& w, const Mapped<M, InnerIdx>& value, uint8_t tag) {
     else if constexpr (inner.kind == AstNodeKind::BitString) {
         w.write(value, tag);
     }
-    else if constexpr (inner.kind == AstNodeKind::OctetString) {
+    else if constexpr (inner.kind == AstNodeKind::OctetString ||
+                       inner.kind == AstNodeKind::Utf8String ||
+                       inner.kind == AstNodeKind::PrintableString ||
+                       inner.kind == AstNodeKind::IA5String ||
+                       inner.kind == AstNodeKind::VisibleString ||
+                       inner.kind == AstNodeKind::BMPString ||
+                       inner.kind == AstNodeKind::TeletexString ||
+                       inner.kind == AstNodeKind::NumericString ||
+                       inner.kind == AstNodeKind::UniversalString ||
+                       inner.kind == AstNodeKind::GeneralString ||
+                       inner.kind == AstNodeKind::UtcTime ||
+                       inner.kind == AstNodeKind::GeneralizedTime) {
         w.write(value, tag);
     }
     else if constexpr (inner.kind == AstNodeKind::ObjectIdentifier) {
@@ -421,6 +460,24 @@ auto decode(Reader& r) -> Mapped<M, I> {
     else if constexpr (node.kind == AstNodeKind::OctetString) {
         return r.read_octet_string();
     }
+    else if constexpr (node.kind == AstNodeKind::Utf8String ||
+                       node.kind == AstNodeKind::PrintableString ||
+                       node.kind == AstNodeKind::IA5String ||
+                       node.kind == AstNodeKind::VisibleString ||
+                       node.kind == AstNodeKind::BMPString ||
+                       node.kind == AstNodeKind::TeletexString ||
+                       node.kind == AstNodeKind::NumericString ||
+                       node.kind == AstNodeKind::UniversalString ||
+                       node.kind == AstNodeKind::GeneralString ||
+                       node.kind == AstNodeKind::UtcTime ||
+                       node.kind == AstNodeKind::GeneralizedTime) {
+        // Read as raw bytes (same as OctetString but with type-specific tag)
+        auto hdr = r.read_header();
+        auto content = r.read_content(hdr.length);
+        OctetString result;
+        result.bytes.assign(content.begin(), content.end());
+        return result;
+    }
     else if constexpr (node.kind == AstNodeKind::ObjectIdentifier) {
         return r.read_oid();
     }
@@ -482,7 +539,18 @@ auto decode_implicit(Reader& r) -> Mapped<M, InnerIdx> {
     else if constexpr (inner.kind == AstNodeKind::BitString) {
         return r.read_bit_string_implicit(0, 0);
     }
-    else if constexpr (inner.kind == AstNodeKind::OctetString) {
+    else if constexpr (inner.kind == AstNodeKind::OctetString ||
+                       inner.kind == AstNodeKind::Utf8String ||
+                       inner.kind == AstNodeKind::PrintableString ||
+                       inner.kind == AstNodeKind::IA5String ||
+                       inner.kind == AstNodeKind::VisibleString ||
+                       inner.kind == AstNodeKind::BMPString ||
+                       inner.kind == AstNodeKind::TeletexString ||
+                       inner.kind == AstNodeKind::NumericString ||
+                       inner.kind == AstNodeKind::UniversalString ||
+                       inner.kind == AstNodeKind::GeneralString ||
+                       inner.kind == AstNodeKind::UtcTime ||
+                       inner.kind == AstNodeKind::GeneralizedTime) {
         return r.read_octet_string_implicit(0, 0);
     }
     else if constexpr (inner.kind == AstNodeKind::Sequence) {

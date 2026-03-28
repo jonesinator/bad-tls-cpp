@@ -21,9 +21,20 @@ inline constexpr uint8_t TagBitString   = 0x03;
 inline constexpr uint8_t TagOctetString = 0x04;
 inline constexpr uint8_t TagNull        = 0x05;
 inline constexpr uint8_t TagOID         = 0x06;
-inline constexpr uint8_t TagEnumerated  = 0x0A;
-inline constexpr uint8_t TagSequence    = 0x30; // Universal 16 | Constructed
-inline constexpr uint8_t TagSet         = 0x31; // Universal 17 | Constructed
+inline constexpr uint8_t TagEnumerated       = 0x0A;
+inline constexpr uint8_t TagUtf8String       = 0x0C;
+inline constexpr uint8_t TagNumericString    = 0x12;
+inline constexpr uint8_t TagPrintableString  = 0x13;
+inline constexpr uint8_t TagTeletexString    = 0x14;
+inline constexpr uint8_t TagIA5String        = 0x16;
+inline constexpr uint8_t TagUtcTime          = 0x17;
+inline constexpr uint8_t TagGeneralizedTime  = 0x18;
+inline constexpr uint8_t TagVisibleString    = 0x1A;
+inline constexpr uint8_t TagGeneralString    = 0x1B;
+inline constexpr uint8_t TagUniversalString  = 0x1C;
+inline constexpr uint8_t TagBMPString        = 0x1E;
+inline constexpr uint8_t TagSequence         = 0x30; // Universal 16 | Constructed
+inline constexpr uint8_t TagSet              = 0x31; // Universal 17 | Constructed
 
 constexpr auto to_der_class(TagClass c) -> uint8_t {
     switch (c) {
@@ -44,6 +55,17 @@ constexpr auto universal_tag_number(AstNodeKind kind) -> uint32_t {
         case AstNodeKind::OctetString:      return 0x04;
         case AstNodeKind::Null:             return 0x05;
         case AstNodeKind::ObjectIdentifier: return 0x06;
+        case AstNodeKind::Utf8String:       return 0x0C;
+        case AstNodeKind::NumericString:    return 0x12;
+        case AstNodeKind::PrintableString:  return 0x13;
+        case AstNodeKind::TeletexString:    return 0x14;
+        case AstNodeKind::IA5String:        return 0x16;
+        case AstNodeKind::UtcTime:          return 0x17;
+        case AstNodeKind::GeneralizedTime:  return 0x18;
+        case AstNodeKind::VisibleString:    return 0x1A;
+        case AstNodeKind::GeneralString:    return 0x1B;
+        case AstNodeKind::UniversalString:  return 0x1C;
+        case AstNodeKind::BMPString:        return 0x1E;
         case AstNodeKind::Sequence:         return 0x10;
         case AstNodeKind::SequenceOf:       return 0x10;
         case AstNodeKind::SetOf:            return 0x11;

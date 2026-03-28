@@ -308,6 +308,21 @@ struct Parser {
             return module.add_node(node);
         }
 
+        // String types — all produce simple leaf nodes
+        if (check(TokenKind::KwUtf8String))      { advance(); AstNode node; node.kind = AstNodeKind::Utf8String;      skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwPrintableString)) { advance(); AstNode node; node.kind = AstNodeKind::PrintableString; skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwIA5String))       { advance(); AstNode node; node.kind = AstNodeKind::IA5String;       skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwVisibleString))   { advance(); AstNode node; node.kind = AstNodeKind::VisibleString;   skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwBMPString))       { advance(); AstNode node; node.kind = AstNodeKind::BMPString;       skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwTeletexString))   { advance(); AstNode node; node.kind = AstNodeKind::TeletexString;   skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwNumericString))   { advance(); AstNode node; node.kind = AstNodeKind::NumericString;   skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwUniversalString)) { advance(); AstNode node; node.kind = AstNodeKind::UniversalString; skip_constraint(); return module.add_node(node); }
+        if (check(TokenKind::KwGeneralString))   { advance(); AstNode node; node.kind = AstNodeKind::GeneralString;   skip_constraint(); return module.add_node(node); }
+
+        // Time types
+        if (check(TokenKind::KwUtcTime))         { advance(); AstNode node; node.kind = AstNodeKind::UtcTime;         return module.add_node(node); }
+        if (check(TokenKind::KwGeneralizedTime)) { advance(); AstNode node; node.kind = AstNodeKind::GeneralizedTime; return module.add_node(node); }
+
         // ANY DEFINED BY identifier
         if (check(TokenKind::KwAny)) {
             advance();

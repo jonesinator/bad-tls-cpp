@@ -1,0 +1,65 @@
+-- X.509 Certificate structures per RFC 5280
+
+X509 DEFINITIONS IMPLICIT TAGS ::= BEGIN
+
+AlgorithmIdentifier ::= SEQUENCE {
+    algorithm   OBJECT IDENTIFIER,
+    parameters  ANY DEFINED BY algorithm OPTIONAL
+}
+
+SubjectPublicKeyInfo ::= SEQUENCE {
+    algorithm        AlgorithmIdentifier,
+    subjectPublicKey BIT STRING
+}
+
+Certificate ::= SEQUENCE {
+    tbsCertificate      TBSCertificate,
+    signatureAlgorithm  AlgorithmIdentifier,
+    signatureValue      BIT STRING
+}
+
+TBSCertificate ::= SEQUENCE {
+    version         [0] EXPLICIT INTEGER DEFAULT 0,
+    serialNumber        INTEGER,
+    signature           AlgorithmIdentifier,
+    issuer              Name,
+    validity            Validity,
+    subject             Name,
+    subjectPublicKeyInfo SubjectPublicKeyInfo,
+    issuerUniqueID  [1] IMPLICIT BIT STRING OPTIONAL,
+    subjectUniqueID [2] IMPLICIT BIT STRING OPTIONAL,
+    extensions      [3] EXPLICIT Extensions OPTIONAL
+}
+
+Validity ::= SEQUENCE {
+    notBefore   Time,
+    notAfter    Time
+}
+
+Time ::= CHOICE {
+    utcTime     UTCTime,
+    generalTime GeneralizedTime
+}
+
+Name ::= CHOICE {
+    rdnSequence RDNSequence
+}
+
+RDNSequence ::= SEQUENCE OF RelativeDistinguishedName
+
+RelativeDistinguishedName ::= SET OF AttributeTypeAndValue
+
+AttributeTypeAndValue ::= SEQUENCE {
+    type    OBJECT IDENTIFIER,
+    value   ANY DEFINED BY type
+}
+
+Extensions ::= SEQUENCE OF Extension
+
+Extension ::= SEQUENCE {
+    extnID      OBJECT IDENTIFIER,
+    critical    BOOLEAN DEFAULT FALSE,
+    extnValue   OCTET STRING
+}
+
+END

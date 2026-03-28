@@ -32,6 +32,7 @@ add_asn1_test(test_aes)
 add_asn1_test(test_gcm)
 add_asn1_test(test_tls_prf)
 add_asn1_test(test_rsa)
+add_asn1_test(test_x509)
 
 add_executable(rsa_tool tests/rsa_tool.cpp)
 target_link_libraries(rsa_tool PRIVATE asn1)

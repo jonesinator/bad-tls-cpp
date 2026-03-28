@@ -38,6 +38,9 @@ asn1/
 │       ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
 │       ├── hash_concept.hpp     # Hash function concept
 │       └── block_cipher_concept.hpp  # Block cipher concept
+├── definitions/
+│   ├── ecprivatekey.asn1        # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
+│   └── x509.asn1               # ASN.1 schema for X.509 certificates (RFC 5280)
 └── tests/                       # Comprehensive test suite
 ```
 
@@ -156,9 +159,12 @@ RSA signature signing and verification per RFC 8017. Supports both **RSA-PSS** (
 
 GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation.
 
-## ASN.1 Definition
+## ASN.1 Definitions
 
-The `definitions/ecprivatekey.asn1` file contains ASN.1 schemas for ECC private keys following RFC 5915 (ECPrivateKey), RFC 5958 (OneAsymmetricKey/PrivateKeyInfo), and RFC 5280 (AlgorithmIdentifier, SubjectPublicKeyInfo). This is the schema that gets `#embed`-ed into tests and parsed at compile time to generate the C++ types for working with real ECC keys.
+The `definitions/` directory contains ASN.1 schemas that get `#embed`-ed and parsed at compile time:
+
+- **`ecprivatekey.asn1`** — ECC key structures per RFC 5915 (ECPrivateKey), RFC 5958 (OneAsymmetricKey/PrivateKeyInfo), and RFC 5280 (AlgorithmIdentifier, SubjectPublicKeyInfo, ECDSA-Sig-Value).
+- **`x509.asn1`** — X.509 certificate structures per RFC 5280 (Certificate, TBSCertificate, Name, Validity, Extensions). Uses `IMPLICIT TAGS` as the default tagging mode.
 
 ## Tests
 
@@ -179,6 +185,7 @@ The test suite is comprehensive:
 | `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
 | `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
 | `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
+| `test_x509.cpp` | X.509 certificate parsing, field extraction, RDN access, extension parsing |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, and RSA-PSS work with OpenSSL CLI |

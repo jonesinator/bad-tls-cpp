@@ -17,6 +17,21 @@ enum class AstNodeKind : uint8_t {
     ObjectIdentifier,
     Enumerated,
 
+    // String types
+    Utf8String,
+    PrintableString,
+    IA5String,
+    VisibleString,
+    BMPString,
+    TeletexString,
+    NumericString,
+    UniversalString,
+    GeneralString,
+
+    // Time types
+    UtcTime,
+    GeneralizedTime,
+
     // Constructed types
     Sequence,
     SequenceOf,
