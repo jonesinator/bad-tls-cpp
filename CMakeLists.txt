@@ -29,6 +29,7 @@ add_asn1_test(test_ecc)
 add_asn1_test(test_ecdsa)
 add_asn1_test(test_ecdh)
 add_asn1_test(test_aes)
+add_asn1_test(test_gcm)
 
 add_executable(ecdsa_tool tests/ecdsa_tool.cpp)
 target_link_libraries(ecdsa_tool PRIVATE asn1)

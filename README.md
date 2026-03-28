@@ -33,7 +33,9 @@ asn1/
 │       ├── hmac.hpp             # HMAC (RFC 2104)
 │       ├── hkdf.hpp             # HKDF (RFC 5869)
 │       ├── aes.hpp              # AES block cipher (FIPS 197)
-│       └── hash_concept.hpp     # Hash function concept
+│       ├── gcm.hpp              # GCM authenticated encryption (SP 800-38D)
+│       ├── hash_concept.hpp     # Hash function concept
+│       └── block_cipher_concept.hpp  # Block cipher concept
 └── tests/                       # Comprehensive test suite
 ```
 
@@ -140,6 +142,10 @@ Generic implementations templated on any type satisfying the `hash_function` con
 
 Complete FIPS 197 AES block cipher as a template `aes_state<KeyBits>` supporting AES-128, AES-192, and AES-256. The S-box, inverse S-box, and round constants are computed at compile time from first principles via GF(2^8) arithmetic (multiplicative inverse + affine transform). Interface: `init(key)` → `encrypt_block(plaintext)` / `decrypt_block(ciphertext)`. Convenience aliases `aes128`, `aes192`, `aes256` and one-shot `aes_encrypt<KeyBits>()`/`aes_decrypt<KeyBits>()` functions.
 
+### GCM (`gcm.hpp`)
+
+GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation.
+
 ## ASN.1 Definition
 
 The `definitions/ecprivatekey.asn1` file contains ASN.1 schemas for ECC private keys following RFC 5915 (ECPrivateKey), RFC 5958 (OneAsymmetricKey/PrivateKeyInfo), and RFC 5280 (AlgorithmIdentifier, SubjectPublicKeyInfo). This is the schema that gets `#embed`-ed into tests and parsed at compile time to generate the C++ types for working with real ECC keys.
@@ -160,6 +166,7 @@ The test suite is comprehensive:
 | `test_ecdsa.cpp` | Signing, verification, RFC 6979, SHA-256/384/512, HMAC, OpenSSL interop |
 | `test_ecdh.cpp` | Keypair derivation, validation, shared secret, HKDF integration |
 | `test_aes.cpp` | AES-128/192/256 FIPS 197 test vectors, encrypt/decrypt roundtrip, compile-time verification |
+| `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
 | `ecdsa_tool.cpp` | Standalone ECDSA utility |
 | `test_openssl_interop.sh` | Shell script verifying signatures/keys work with OpenSSL CLI |
 

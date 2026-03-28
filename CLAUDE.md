@@ -18,7 +18,7 @@ Header-only library. No `.cpp` source files — only headers under `include/` an
 
 Two independent module trees sharing no code:
 - **`include/asn1/`** — ASN.1 parsing and DER encoding. Pipeline: lexer → parser → AST → DER codegen → PEM.
-- **`include/number/`** — Cryptographic math. Pipeline: big integers → field elements → curve points → ECDSA/ECDH, plus SHA-2 → HMAC → HKDF, plus AES block cipher.
+- **`include/number/`** — Cryptographic math. Pipeline: big integers → field elements → curve points → ECDSA/ECDH, plus SHA-2 → HMAC → HKDF, plus AES → GCM authenticated encryption.
 
 The `number/` headers are also available at `/home/aaron/projects/number` as a separate working directory.
 
@@ -57,6 +57,6 @@ Reader/Writer follow Tag-Length-Value structure. Writer uses a `write_constructe
 
 **Adding a new hash**: Implement the `hash_function` concept from `hash_concept.hpp` (provide `block_size`, `digest_size`, `init()`, `update()`, `finalize()`). HMAC and HKDF will work automatically.
 
-**Adding a new block cipher**: Follow the `aes.hpp` pattern — `consteval` table generation in a detail namespace, a `_state<KeyBits>` struct with `init(key)`, `encrypt_block()`, `decrypt_block()`, type aliases, and one-shot convenience functions.
+**Adding a new block cipher**: Follow the `aes.hpp` pattern — `consteval` table generation in a detail namespace, a `_state<KeyBits>` struct with `init(key)`, `encrypt_block()`, `decrypt_block()`, type aliases, and one-shot convenience functions. Ensure the type satisfies the `block_cipher` concept from `block_cipher_concept.hpp` so it works with GCM automatically.
 
 **Debugging constexpr failures**: Constexpr errors surface as compile errors. Look for `throw` statements in constexpr code — these become compile-time error messages (e.g., `ParseError`, `DecodeError`). The thrown string literal is the diagnostic.
