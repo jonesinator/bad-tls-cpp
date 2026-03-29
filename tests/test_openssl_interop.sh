@@ -15,6 +15,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 TOOL="$BUILD_DIR/ecdsa_tool"
 RSA_TOOL="$BUILD_DIR/rsa_tool"
+X509_TOOL="$BUILD_DIR/x509_tool"
 WORK="$(mktemp -d)"
 
 trap 'rm -rf "$WORK"' EXIT
@@ -48,7 +49,7 @@ check_fail() {
 
 printf "Building tools...\n"
 cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1
-cmake --build "$BUILD_DIR" --target ecdsa_tool --target rsa_tool >/dev/null 2>&1
+cmake --build "$BUILD_DIR" --target ecdsa_tool --target rsa_tool --target x509_tool >/dev/null 2>&1
 printf "Build OK.\n\n"
 
 # --- Key 1: the hardcoded test key ---
@@ -309,6 +310,120 @@ check_fail "RSA PKCS1v15 wrong message rejected by library" \
 
 check_fail "RSA PKCS1v15 wrong message rejected by openssl" \
     openssl dgst -sha256 -verify "$WORK/rsa_pub.pem" -signature "$WORK/rsa_pkcs1_neg.bin" "$WORK/msg3.bin"
+
+# =========================================================================
+printf "\n=== Test suite: X.509 certificate chain verification ===\n"
+# =========================================================================
+
+# --- RSA chain: root -> intermediate -> leaf (depth 2) ---
+
+openssl genrsa -out "$WORK/chain_root_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$WORK/chain_root_key.pem" -out "$WORK/chain_root.pem" \
+    -days 365 -subj "/CN=Chain Root CA/O=Test" \
+    -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
+
+openssl genrsa -out "$WORK/chain_int_key.pem" 2048 2>/dev/null
+openssl req -new -key "$WORK/chain_int_key.pem" -out "$WORK/chain_int.csr" \
+    -subj "/CN=Chain Intermediate/O=Test" 2>/dev/null
+openssl x509 -req -in "$WORK/chain_int.csr" -CA "$WORK/chain_root.pem" \
+    -CAkey "$WORK/chain_root_key.pem" -CAcreateserial \
+    -out "$WORK/chain_int.pem" -days 365 \
+    -extfile <(printf "basicConstraints=critical,CA:TRUE") 2>/dev/null
+
+openssl genrsa -out "$WORK/chain_leaf_key.pem" 2048 2>/dev/null
+openssl req -new -key "$WORK/chain_leaf_key.pem" -out "$WORK/chain_leaf.csr" \
+    -subj "/CN=leaf.chain.test/O=Test" 2>/dev/null
+openssl x509 -req -in "$WORK/chain_leaf.csr" -CA "$WORK/chain_int.pem" \
+    -CAkey "$WORK/chain_int_key.pem" -CAcreateserial \
+    -out "$WORK/chain_leaf.pem" -days 365 2>/dev/null
+
+# Verify: OpenSSL verifies the chain
+check "RSA depth-2 chain: openssl verifies" \
+    openssl verify -CAfile "$WORK/chain_root.pem" -untrusted "$WORK/chain_int.pem" "$WORK/chain_leaf.pem"
+
+# Verify: library verifies the chain (leaf, intermediate, root)
+check "RSA depth-2 chain: library verifies" \
+    "$X509_TOOL" verify-chain "$WORK/chain_root.pem" "$WORK/chain_leaf.pem" "$WORK/chain_int.pem" "$WORK/chain_root.pem"
+
+# Verify: library rejects chain with wrong root
+openssl genrsa -out "$WORK/wrong_root_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$WORK/wrong_root_key.pem" -out "$WORK/wrong_root.pem" \
+    -days 365 -subj "/CN=Wrong Root/O=Other" 2>/dev/null
+
+check_fail "RSA depth-2 chain: wrong root rejected by library" \
+    "$X509_TOOL" verify-chain "$WORK/wrong_root.pem" "$WORK/chain_leaf.pem" "$WORK/chain_int.pem" "$WORK/chain_root.pem"
+
+# --- RSA chain: depth 1 (root directly signs leaf) ---
+
+openssl genrsa -out "$WORK/d1_leaf_key.pem" 2048 2>/dev/null
+openssl req -new -key "$WORK/d1_leaf_key.pem" -out "$WORK/d1_leaf.csr" \
+    -subj "/CN=direct.leaf.test/O=Test" 2>/dev/null
+openssl x509 -req -in "$WORK/d1_leaf.csr" -CA "$WORK/chain_root.pem" \
+    -CAkey "$WORK/chain_root_key.pem" -CAcreateserial \
+    -out "$WORK/d1_leaf.pem" -days 365 2>/dev/null
+
+check "RSA depth-1 chain: library verifies" \
+    "$X509_TOOL" verify-chain "$WORK/chain_root.pem" "$WORK/d1_leaf.pem" "$WORK/chain_root.pem"
+
+# --- EC chain: P-256 root -> P-256 leaf (depth 1) ---
+
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/ec_root_key.pem" 2>/dev/null
+openssl req -x509 -new -key "$WORK/ec_root_key.pem" -out "$WORK/ec_root.pem" \
+    -days 365 -subj "/CN=EC Root CA/O=Test" \
+    -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
+
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/ec_leaf_key.pem" 2>/dev/null
+openssl req -new -key "$WORK/ec_leaf_key.pem" -out "$WORK/ec_leaf.csr" \
+    -subj "/CN=ec.leaf.test/O=Test" 2>/dev/null
+openssl x509 -req -in "$WORK/ec_leaf.csr" -CA "$WORK/ec_root.pem" \
+    -CAkey "$WORK/ec_root_key.pem" -CAcreateserial \
+    -out "$WORK/ec_leaf.pem" -days 365 2>/dev/null
+
+check "EC P-256 depth-1 chain: openssl verifies" \
+    openssl verify -CAfile "$WORK/ec_root.pem" "$WORK/ec_leaf.pem"
+
+check "EC P-256 depth-1 chain: library verifies" \
+    "$X509_TOOL" verify-chain "$WORK/ec_root.pem" "$WORK/ec_leaf.pem" "$WORK/ec_root.pem"
+
+# --- Deep chain: root -> int1 -> int2 -> int3 -> leaf (depth 4) ---
+
+prev_cert="$WORK/chain_root.pem"
+prev_key="$WORK/chain_root_key.pem"
+
+for depth in 1 2 3; do
+    openssl genrsa -out "$WORK/deep_int${depth}_key.pem" 2048 2>/dev/null
+    openssl req -new -key "$WORK/deep_int${depth}_key.pem" -out "$WORK/deep_int${depth}.csr" \
+        -subj "/CN=Deep Intermediate ${depth}/O=Test" 2>/dev/null
+    openssl x509 -req -in "$WORK/deep_int${depth}.csr" \
+        -CA "$prev_cert" -CAkey "$prev_key" -CAcreateserial \
+        -out "$WORK/deep_int${depth}.pem" -days 365 \
+        -extfile <(printf "basicConstraints=critical,CA:TRUE") 2>/dev/null
+    prev_cert="$WORK/deep_int${depth}.pem"
+    prev_key="$WORK/deep_int${depth}_key.pem"
+done
+
+openssl genrsa -out "$WORK/deep_leaf_key.pem" 2048 2>/dev/null
+openssl req -new -key "$WORK/deep_leaf_key.pem" -out "$WORK/deep_leaf.csr" \
+    -subj "/CN=deep.leaf.test/O=Test" 2>/dev/null
+openssl x509 -req -in "$WORK/deep_leaf.csr" \
+    -CA "$prev_cert" -CAkey "$prev_key" -CAcreateserial \
+    -out "$WORK/deep_leaf.pem" -days 365 2>/dev/null
+
+# Build the full chain file for OpenSSL verify
+cat "$WORK/deep_int1.pem" "$WORK/deep_int2.pem" "$WORK/deep_int3.pem" > "$WORK/deep_chain.pem"
+
+check "RSA depth-4 chain: openssl verifies" \
+    openssl verify -CAfile "$WORK/chain_root.pem" -untrusted "$WORK/deep_chain.pem" "$WORK/deep_leaf.pem"
+
+check "RSA depth-4 chain: library verifies" \
+    "$X509_TOOL" verify-chain "$WORK/chain_root.pem" \
+        "$WORK/deep_leaf.pem" "$WORK/deep_int3.pem" "$WORK/deep_int2.pem" "$WORK/deep_int1.pem" "$WORK/chain_root.pem"
+
+# --- Negative: missing intermediate ---
+
+check_fail "RSA depth-4 chain: missing intermediate rejected by library" \
+    "$X509_TOOL" verify-chain "$WORK/chain_root.pem" \
+        "$WORK/deep_leaf.pem" "$WORK/deep_int3.pem" "$WORK/chain_root.pem"
 
 # =========================================================================
 printf "\n=== Results ===\n"

@@ -33,6 +33,12 @@ add_asn1_test(test_gcm)
 add_asn1_test(test_tls_prf)
 add_asn1_test(test_rsa)
 add_asn1_test(test_x509)
+add_asn1_test(test_x509_verify)
+
+add_executable(x509_tool tests/x509_tool.cpp)
+target_link_libraries(x509_tool PRIVATE asn1)
+target_include_directories(x509_tool PRIVATE ${CMAKE_SOURCE_DIR})
+target_compile_options(x509_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} -fconstexpr-ops-limit=1000000000)
 
 add_executable(rsa_tool tests/rsa_tool.cpp)
 target_link_libraries(rsa_tool PRIVATE asn1)

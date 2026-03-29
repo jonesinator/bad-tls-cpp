@@ -41,6 +41,9 @@ asn1/
 ├── definitions/
 │   ├── ecprivatekey.asn1        # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
 │   └── x509.asn1               # ASN.1 schema for X.509 certificates (RFC 5280)
+├── include/asn1/x509/           # X.509 certificate verification
+│   ├── verify.hpp               # Chain verification, key extraction, sig verify
+│   └── trust_store.hpp          # Trusted root certificate store
 └── tests/                       # Comprehensive test suite
 ```
 
@@ -186,6 +189,7 @@ The test suite is comprehensive:
 | `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
 | `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
 | `test_x509.cpp` | X.509 certificate parsing, field extraction, RDN access, extension parsing |
+| `test_x509_verify.cpp` | Certificate chain verification, TBS extraction, key extraction, trust store |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, and RSA-PSS work with OpenSSL CLI |

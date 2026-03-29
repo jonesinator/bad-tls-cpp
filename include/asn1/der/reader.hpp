@@ -25,6 +25,7 @@ public:
 
     bool at_end() const { return pos_ >= data_.size(); }
     auto remaining() const -> std::size_t { return data_.size() - pos_; }
+    auto position() const -> std::size_t { return pos_; }
 
     auto peek_header() const -> TlvHeader {
         if (pos_ >= data_.size())
