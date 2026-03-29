@@ -43,7 +43,8 @@ asn1/
 │   │   └── block_cipher_concept.hpp  # Block cipher concept
 │   ├── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
 │   │   ├── verify.hpp           # Chain verification, key extraction, sig verify
-│   │   └── trust_store.hpp      # Trusted root certificate store
+│   │   ├── trust_store.hpp      # Trusted root certificate store
+│   │   └── mozilla_roots.hpp    # Mozilla CA bundle (145 roots, embedded via #embed)
 │   └── tls/                     # TLS 1.2 client (depends on crypto/ + x509/)
 │       ├── types.hpp            # Wire enums, ProtocolVersion, CipherSuite, etc.
 │       ├── record.hpp           # TlsReader/TlsWriter, record framing
@@ -194,6 +195,10 @@ Defines a `random_generator` concept requiring a single `fill(std::span<uint8_t>
 
 Helper functions: `random_bytes<N>(rng)` fills an `std::array`, `random_scalar<TCurve>(rng)` generates a value in [1, n-1] via rejection sampling for ECC key generation.
 
+### Mozilla Root CA Bundle (`x509/mozilla_roots.hpp`)
+
+Embeds Mozilla's trusted root CA certificates (from curl.se's `cacert.pem`) via `#embed`. The PEM bundle is downloaded by CMake at configure time with SHA-256 verification. `load_mozilla_roots()` parses all 145 certificates at runtime and returns a populated `trust_store`. The multi-PEM parsing uses `pem::decode_all()` which iterates through all `BEGIN`/`END` blocks in a single file.
+
 ## The TLS 1.2 Layer (`tls/`)
 
 The TLS module implements a TLS 1.2 client (RFC 5246): types, binary serialization, key derivation, record-level encryption, transport abstraction, buffered record I/O, ECDHE key exchange, ServerKeyExchange signature verification, and a complete handshake state machine with application data send/receive. It uses its own big-endian binary framing, not ASN.1 DER.
@@ -279,6 +284,7 @@ The test suite is comprehensive:
 | `test_tls_key_schedule.cpp` | Master secret derivation, key block expansion, verify_data, transcript hash |
 | `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
 | `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |
+| `test_mozilla_roots.cpp` | Mozilla CA bundle loading (145 roots), subject DER extraction |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
@@ -286,10 +292,10 @@ The test suite is comprehensive:
 
 ## Build
 
-Requires CMake 3.30+ and a C++26 compiler (tested with recent Clang).
+Requires CMake 3.30+, a C++26 compiler (tested with recent GCC), and internet access for the first configure (downloads Mozilla's CA bundle). The CA bundle is cached in the build directory and verified by SHA-256 hash.
 
 ```bash
-cmake -B build -G Ninja
+cmake -B build -G Ninja    # downloads cacert.pem on first run
 cmake --build build
 ctest --test-dir build
 ```

@@ -9,13 +9,25 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_library(asn1 INTERFACE)
 target_include_directories(asn1 INTERFACE include)
 
+# Download Mozilla CA bundle (pinned version with SHA-256 verification)
+set(CACERT_URL "https://curl.se/ca/cacert-2026-03-19.pem")
+set(CACERT_FILE "${CMAKE_BINARY_DIR}/cacert.pem")
+set(CACERT_SHA256 "b6e66569cc3d438dd5abe514d0df50005d570bfc96c14dca8f768d020cb96171")
+
+if(NOT EXISTS "${CACERT_FILE}")
+    message(STATUS "Downloading Mozilla CA bundle...")
+    file(DOWNLOAD "${CACERT_URL}" "${CACERT_FILE}"
+         EXPECTED_HASH SHA256=${CACERT_SHA256}
+         TLS_VERIFY ON)
+endif()
+
 enable_testing()
 
 function(add_asn1_test name)
     add_executable(${name} tests/${name}.cpp)
     target_link_libraries(${name} PRIVATE asn1)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR})
-    target_compile_options(${name} PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} -fconstexpr-ops-limit=1000000000)
+    target_compile_options(${name} PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -41,18 +53,19 @@ add_asn1_test(test_tls_handshake)
 add_asn1_test(test_tls_key_schedule)
 add_asn1_test(test_tls_record_protection)
 add_asn1_test(test_tls_client)
+add_asn1_test(test_mozilla_roots)
 
 add_executable(x509_tool tests/x509_tool.cpp)
 target_link_libraries(x509_tool PRIVATE asn1)
 target_include_directories(x509_tool PRIVATE ${CMAKE_SOURCE_DIR})
-target_compile_options(x509_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} -fconstexpr-ops-limit=1000000000)
+target_compile_options(x509_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
 
 add_executable(rsa_tool tests/rsa_tool.cpp)
 target_link_libraries(rsa_tool PRIVATE asn1)
 target_include_directories(rsa_tool PRIVATE ${CMAKE_SOURCE_DIR})
-target_compile_options(rsa_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} -fconstexpr-ops-limit=1000000000)
+target_compile_options(rsa_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
 
 add_executable(ecdsa_tool tests/ecdsa_tool.cpp)
 target_link_libraries(ecdsa_tool PRIVATE asn1)
 target_include_directories(ecdsa_tool PRIVATE ${CMAKE_SOURCE_DIR})
-target_compile_options(ecdsa_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} -fconstexpr-ops-limit=1000000000)
+target_compile_options(ecdsa_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)

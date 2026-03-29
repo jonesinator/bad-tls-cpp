@@ -105,6 +105,23 @@ inline auto encode(std::string_view label, std::span<const uint8_t> der) -> std:
     return result;
 }
 
+// Decode all PEM blocks in a multi-certificate file.
+inline auto decode_all(std::string_view pem) -> std::vector<Block> {
+    std::vector<Block> blocks;
+    size_t pos = 0;
+    while (pos < pem.size()) {
+        auto begin = pem.find("-----BEGIN ", pos);
+        if (begin == std::string_view::npos) break;
+        auto end_marker = pem.find("-----END ", begin);
+        if (end_marker == std::string_view::npos) break;
+        auto end_line = pem.find('\n', end_marker);
+        if (end_line == std::string_view::npos) end_line = pem.size() - 1;
+        blocks.push_back(decode(pem.substr(begin, end_line - begin + 1)));
+        pos = end_line + 1;
+    }
+    return blocks;
+}
+
 // --- Convenience: PEM ↔ typed values ---
 
 template <auto M, std::size_t I>
