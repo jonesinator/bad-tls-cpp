@@ -160,19 +160,17 @@ constexpr void write_client_hello_extensions(
         }
     }
 
+    // extended_master_secret (type 0x0017) — RFC 7627
+    {
+        w.write_u16(static_cast<uint16_t>(ExtensionType::extended_master_secret));
+        w.write_u16(0); // empty extension data
+    }
+
     // renegotiation_info (type 0xFF01) — RFC 5746
-    // Required by OpenSSL 3.x to avoid "unsafe legacy renegotiation" error.
     {
         w.write_u16(static_cast<uint16_t>(ExtensionType::renegotiation_info));
         w.write_u16(1); // extension data length
         w.write_u8(0);  // empty renegotiated_connection
-    }
-
-    // extended_master_secret (type 0x0017) — RFC 7627
-    // Required by OpenSSL 3.x when client certificates are used.
-    {
-        w.write_u16(static_cast<uint16_t>(ExtensionType::extended_master_secret));
-        w.write_u16(0); // empty extension data
     }
 
     // Patch total extensions length

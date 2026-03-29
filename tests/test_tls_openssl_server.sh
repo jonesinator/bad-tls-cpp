@@ -128,10 +128,18 @@ run_test "tls_connect_tool -> openssl s_server" "HTTP" \
 
 stop_server
 
-# NOTE: mTLS against openssl s_server requires Extended Master Secret (RFC 7627)
-# which OpenSSL 3.x mandates for client certificate connections. Our EMS
-# implementation is in progress — see extended_master_secret in handshake.hpp.
-# The test is disabled until EMS is verified against OpenSSL.
+# ========== Test 2: mTLS with openssl s_server ==========
+echo ""
+echo "=== Test: mTLS (openssl s_server -Verify) ==="
+PORT=$(get_port 14445)
+start_openssl_server "$PORT" -Verify 1 -CAfile "$TMPDIR/client_ca.pem"
+
+run_test "mTLS: client with cert -> openssl s_server" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" \
+    --cert "$TMPDIR/client_chain.pem" --key "$TMPDIR/client_key.pem" \
+    localhost "$PORT"
+
+stop_server
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

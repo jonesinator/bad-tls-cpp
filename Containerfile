@@ -8,7 +8,8 @@ RUN apt-get update && \
         openssl \
         ca-certificates \
         curl \
-        python3 && \
+        python3 \
+        strace && \
     rm -rf /var/lib/apt/lists/*
 
 FROM base AS build

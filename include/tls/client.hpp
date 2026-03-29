@@ -23,10 +23,10 @@ namespace tls {
 
 struct client_config {
     std::array<CipherSuite, 4> cipher_suites = {
-        CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     };
     size_t num_cipher_suites = 4;
 
@@ -307,9 +307,8 @@ private:
             }
         }
 
-        // --- Build client Certificate (if requested) ---
+        // --- Send client Certificate immediately (if requested) ---
         bool sent_client_cert = false;
-        TlsWriter<32768> ccert_w;
         if (cert_requested) {
             CertificateMessage client_cert_msg{};
             if (!config_.client_certificate_chain.empty()) {
@@ -320,8 +319,11 @@ private:
                     client_cert_msg.certificate_list.push_back(cert);
                 }
             }
+            TlsWriter<32768> ccert_w;
             write_certificate(ccert_w, client_cert_msg);
             transcript.update(ccert_w.data());
+            auto ccert_err = rio_.send_record(ContentType::handshake, ccert_w.data());
+            if (!ccert_err) return {ccert_err.error};
         }
 
         // --- ECDH key exchange ---
@@ -331,16 +333,17 @@ private:
             rng_);
         if (!ecdh_res) return {ecdh_res.error};
 
-        // --- Build ClientKeyExchange ---
+        // --- Send ClientKeyExchange ---
         TlsWriter<256> cke_w;
         write_client_key_exchange_ecdhe(cke_w, ecdh_res.value.cke);
         transcript.update(cke_w.data());
+        auto cke_err = rio_.send_record(ContentType::handshake, cke_w.data());
+        if (!cke_err) return {cke_err.error};
 
         // Save session hash for EMS derivation (transcript up to ClientKeyExchange)
         auto session_hash = transcript.current_hash();
 
-        // --- Build CertificateVerify (if client cert was sent) ---
-        TlsWriter<1024> cv_w;
+        // --- Send CertificateVerify (if client cert was sent) ---
         if (sent_client_cert) {
             auto cv_hash = transcript.current_hash();
 
@@ -371,21 +374,9 @@ private:
                 encode_sig(ecdsa_sign<asn1::x509::p384_curve, Hash>(*d, cv_hash));
             }
 
+            TlsWriter<1024> cv_w;
             write_certificate_verify(cv_w, cv);
             transcript.update(cv_w.data());
-        }
-
-        // --- Send all client handshake messages together ---
-        // Sending Certificate + ClientKeyExchange + CertificateVerify without
-        // delay is important: some TLS servers (e.g. OpenSSL) read all three
-        // in sequence and may error if there's a long gap between them.
-        if (cert_requested) {
-            auto err = rio_.send_record(ContentType::handshake, ccert_w.data());
-            if (!err) return {err.error};
-        }
-        auto cke_err = rio_.send_record(ContentType::handshake, cke_w.data());
-        if (!cke_err) return {cke_err.error};
-        if (sent_client_cert) {
             auto cv_err = rio_.send_record(ContentType::handshake, cv_w.data());
             if (!cv_err) return {cv_err.error};
         }
