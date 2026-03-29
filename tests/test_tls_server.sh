@@ -133,20 +133,22 @@ stop_server() {
     SERVER_PID=""
 }
 
-# ========== Test 1: Basic TLS (no mTLS) ==========
-echo ""
-echo "=== Test: Basic TLS ==="
-PORT=$(get_port 14433)
-start_server "$PORT" "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem"
+# ========== Test 1: Basic TLS per cipher suite ==========
+for SUITE in ECDHE-ECDSA-AES128-GCM-SHA256 ECDHE-ECDSA-AES256-GCM-SHA384; do
+    echo ""
+    echo "=== Test: Basic TLS ($SUITE) ==="
+    PORT=$(get_port 14433)
+    start_server "$PORT" "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem"
 
-run_test "curl -> Hello, world!" "Hello, world!" \
-    curl -s --cacert "$TMPDIR/ca.pem" --tlsv1.2 --tls-max 1.2 \
-    --ciphers ECDHE-ECDSA-AES128-GCM-SHA256 "https://localhost:$PORT/"
+    run_test "curl $SUITE -> Hello, world!" "Hello, world!" \
+        curl -s --cacert "$TMPDIR/ca.pem" --tlsv1.2 --tls-max 1.2 \
+        --ciphers "$SUITE" "https://localhost:$PORT/"
 
-run_test "tls_connect_tool -> Hello, world!" "Hello, world!" \
-    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
+    run_test "tls_connect_tool -> Hello, world!" "Hello, world!" \
+        "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
 
-stop_server
+    stop_server
+done
 
 # ========== Test 2: Optional mTLS (client with cert) ==========
 echo ""

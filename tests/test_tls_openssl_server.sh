@@ -117,29 +117,33 @@ stop_server() {
     SERVER_PID=""
 }
 
-# ========== Test 1: Basic TLS ==========
-echo ""
-echo "=== Test: Basic TLS (openssl s_server) ==="
-PORT=$(get_port 14444)
-start_openssl_server "$PORT"
+# ========== Test 1: Basic TLS per cipher suite ==========
+for SUITE in ECDHE-ECDSA-AES128-GCM-SHA256 ECDHE-ECDSA-AES256-GCM-SHA384; do
+    echo ""
+    echo "=== Test: Basic TLS ($SUITE) ==="
+    PORT=$(get_port 14444)
+    start_openssl_server "$PORT" -cipher "$SUITE"
 
-run_test "tls_connect_tool -> openssl s_server" "HTTP" \
-    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
+    run_test "TLS $SUITE" "HTTP" \
+        "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
 
-stop_server
+    stop_server
+done
 
-# ========== Test 2: mTLS with openssl s_server ==========
-echo ""
-echo "=== Test: mTLS (openssl s_server -Verify) ==="
-PORT=$(get_port 14445)
-start_openssl_server "$PORT" -Verify 1 -CAfile "$TMPDIR/client_ca.pem"
+# ========== Test 2: mTLS per cipher suite ==========
+for SUITE in ECDHE-ECDSA-AES128-GCM-SHA256 ECDHE-ECDSA-AES256-GCM-SHA384; do
+    echo ""
+    echo "=== Test: mTLS ($SUITE) ==="
+    PORT=$(get_port 14445)
+    start_openssl_server "$PORT" -Verify 1 -CAfile "$TMPDIR/client_ca.pem" -cipher "$SUITE"
 
-run_test "mTLS: client with cert -> openssl s_server" "HTTP" \
-    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" \
-    --cert "$TMPDIR/client_chain.pem" --key "$TMPDIR/client_key.pem" \
-    localhost "$PORT"
+    run_test "mTLS $SUITE" "HTTP" \
+        "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" \
+        --cert "$TMPDIR/client_chain.pem" --key "$TMPDIR/client_key.pem" \
+        localhost "$PORT"
 
-stop_server
+    stop_server
+done
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

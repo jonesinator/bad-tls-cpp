@@ -23,10 +23,10 @@ namespace tls {
 
 struct client_config {
     std::array<CipherSuite, 4> cipher_suites = {
-        CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
     };
     size_t num_cipher_suites = 4;
 

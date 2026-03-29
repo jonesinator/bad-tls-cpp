@@ -76,10 +76,21 @@ constexpr typename TCurve::number_type rfc6979_k(
     // Step (g): V = HMAC(K, V)
     V = hmac<THash>(K, V);
 
+    // bits2int: when hash output exceeds curve order length, truncate
+    // (RFC 6979 Section 2.3.2)
+    auto n_bytes = n.to_bytes(std::endian::big);
+    size_t qlen_bytes = n_bytes.size();
+    {
+        size_t start = 0;
+        while (start < n_bytes.size() && n_bytes[start] == 0) ++start;
+        qlen_bytes = n_bytes.size() - start;
+    }
+    size_t take = D < qlen_bytes ? D : qlen_bytes;
+
     // Step (h): generate k
     for (;;) {
         V = hmac<THash>(K, V);
-        auto candidate = num::from_bytes(std::span<const uint8_t>(V.data(), D), std::endian::big);
+        auto candidate = num::from_bytes(std::span<const uint8_t>(V.data(), take), std::endian::big);
         if (candidate != num(0U) && candidate < n) {
             return candidate;
         }
@@ -112,7 +123,17 @@ constexpr ecdsa_signature<TCurve> ecdsa_sign(
     constexpr size_t D = THash::digest_size;
 
     const num n = TCurve::n();
-    const num z = num::from_bytes(std::span<const uint8_t>(message_hash.data(), D), std::endian::big);
+
+    // bits2int: truncate hash to curve order length (FIPS 186-4 Section 6.4)
+    auto n_bytes = n.to_bytes(std::endian::big);
+    size_t qlen_bytes = n_bytes.size();
+    {
+        size_t start = 0;
+        while (start < n_bytes.size() && n_bytes[start] == 0) ++start;
+        qlen_bytes = n_bytes.size() - start;
+    }
+    size_t z_take = D < qlen_bytes ? D : qlen_bytes;
+    const num z = num::from_bytes(std::span<const uint8_t>(message_hash.data(), z_take), std::endian::big);
 
     const num k = ecdsa_detail::rfc6979_k<TCurve, THash>(private_key, message_hash);
 
@@ -182,7 +203,16 @@ constexpr bool ecdsa_verify(
     if (sig.r == zero || sig.r >= n) return false;
     if (sig.s == zero || sig.s >= n) return false;
 
-    const num z = num::from_bytes(std::span<const uint8_t>(message_hash.data(), D), std::endian::big);
+    // bits2int: truncate hash to curve order length (FIPS 186-4)
+    auto n_bytes = n.to_bytes(std::endian::big);
+    size_t qlen_bytes = n_bytes.size();
+    {
+        size_t start = 0;
+        while (start < n_bytes.size() && n_bytes[start] == 0) ++start;
+        qlen_bytes = n_bytes.size() - start;
+    }
+    size_t z_take = D < qlen_bytes ? D : qlen_bytes;
+    const num z = num::from_bytes(std::span<const uint8_t>(message_hash.data(), z_take), std::endian::big);
 
     // w = s^-1 mod n
     auto w_opt = sig.s.inv_mod(n);
