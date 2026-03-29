@@ -32,6 +32,10 @@
 
 namespace tls {
 
+// --- Role ---
+
+enum class tls_role : uint8_t { client, server };
+
 // --- Error handling ---
 
 enum class tls_error : uint8_t {
@@ -89,13 +93,21 @@ struct record_io {
     bool read_encrypted = false;
     cipher_state cs{};
 
+    tls_role role_ = tls_role::client;
+
     constexpr explicit record_io(Transport& t) : trans(t) {}
+    constexpr record_io(Transport& t, tls_role role) : trans(t), role_(role) {}
 
     constexpr void activate_write_cipher(const KeyBlock& kb, CipherSuite suite) {
         cs.suite = suite;
         cs.key_length = kb.key_length;
-        cs.write_key = kb.client_write_key;
-        cs.write_iv = kb.client_write_iv;
+        if (role_ == tls_role::client) {
+            cs.write_key = kb.client_write_key;
+            cs.write_iv = kb.client_write_iv;
+        } else {
+            cs.write_key = kb.server_write_key;
+            cs.write_iv = kb.server_write_iv;
+        }
         cs.write_seq = 0;
         write_encrypted = true;
     }
@@ -103,8 +115,13 @@ struct record_io {
     constexpr void activate_read_cipher(const KeyBlock& kb, CipherSuite suite) {
         cs.suite = suite;
         cs.key_length = kb.key_length;
-        cs.read_key = kb.server_write_key;
-        cs.read_iv = kb.server_write_iv;
+        if (role_ == tls_role::client) {
+            cs.read_key = kb.server_write_key;
+            cs.read_iv = kb.server_write_iv;
+        } else {
+            cs.read_key = kb.client_write_key;
+            cs.read_iv = kb.client_write_iv;
+        }
         cs.read_seq = 0;
         read_encrypted = true;
     }

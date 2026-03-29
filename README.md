@@ -46,7 +46,7 @@ bad-tls-cpp/
 │   │   ├── trust_store.hpp           # Trusted root certificate store
 │   │   ├── mozilla_roots.hpp         # Mozilla CA bundle (145 roots, embedded via #embed)
 │   │   └── hostname_verifier.hpp     # Hostname verification (RFC 6125/2818)
-│   └── tls/                          # TLS 1.2 client (depends on crypto/ + x509/)
+│   └── tls/                          # TLS 1.2 client + server (depends on crypto/ + x509/)
 │       ├── types.hpp                 # Wire enums, ProtocolVersion, CipherSuite, etc.
 │       ├── record.hpp                # TlsReader/TlsWriter, record framing
 │       ├── handshake.hpp             # Handshake message structs + serialization
@@ -57,7 +57,9 @@ bad-tls-cpp/
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
 │       ├── client.hpp                # tls_client handshake state machine
-│       └── tcp_transport.hpp         # POSIX TCP socket transport
+│       ├── server.hpp                # tls_server handshake state machine
+│       ├── private_key.hpp           # EC private key loading from PEM
+│       └── tcp_transport.hpp         # POSIX TCP socket + listener transport
 └── tests/                            # Comprehensive test suite
 ```
 
@@ -207,7 +209,7 @@ A `certificate_verifier` that checks the server's certificate against an expecte
 
 ## The TLS 1.2 Layer (`tls/`)
 
-The TLS module implements a TLS 1.2 client (RFC 5246): types, binary serialization, key derivation, record-level encryption, transport abstraction, buffered record I/O, ECDHE key exchange, ServerKeyExchange signature verification, and a complete handshake state machine with application data send/receive. It uses its own big-endian binary framing, not ASN.1 DER.
+The TLS module implements TLS 1.2 client and server (RFC 5246): types, binary serialization, key derivation, record-level encryption, transport abstraction, buffered record I/O, ECDHE key exchange, signature verification/generation, and complete handshake state machines with application data send/receive. It uses its own big-endian binary framing, not ASN.1 DER.
 
 ### Wire Types (`tls/types.hpp`)
 
@@ -219,7 +221,7 @@ Enumerations and value types matching the TLS binary protocol: `ContentType`, `H
 
 ### Handshake Messages (`tls/handshake.hpp`)
 
-Structs and serialization for all handshake message types: `ClientHello`, `ServerHello`, `CertificateMessage`, `ServerKeyExchangeEcdhe`, `ServerHelloDone`, `ClientKeyExchangeEcdhe`, `CertificateVerify`, and `Finished`. Client-sent messages have `write_*` functions; server-sent messages have `read_*` functions. Extension helpers build the mandatory ClientHello extensions (supported_groups, ec_point_formats, signature_algorithms).
+Structs and serialization for all handshake message types: `ClientHello`, `ServerHello`, `CertificateMessage`, `ServerKeyExchangeEcdhe`, `ServerHelloDone`, `ClientKeyExchangeEcdhe`, `CertificateVerify`, and `Finished`. Both `read_*` and `write_*` functions are provided for all message types, supporting both client and server roles. Extension helpers build the mandatory ClientHello extensions (supported_groups, ec_point_formats, signature_algorithms).
 
 ### Cipher Suite Definitions (`tls/cipher_suite.hpp`)
 
@@ -249,15 +251,23 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 ### Connection Infrastructure (`tls/connection.hpp`)
 
-`tls_error` enum and `tls_result<T>` for error propagation. `record_io<Transport>` provides buffered record-layer I/O over any transport, with encryption state management and runtime cipher suite dispatch via `dispatch_cipher_suite`. `handshake_reader` handles message framing within handshake records (coalescing and fragmentation). `verify_server_key_exchange()` verifies the ServerKeyExchange signature (ECDSA or RSA) against the server's certificate public key. `compute_ecdh_exchange()` performs the full ECDHE key exchange: parse server point, validate, generate ephemeral keypair, compute shared secret, serialize client public key.
+`tls_role` enum, `tls_error` enum and `tls_result<T>` for error propagation. `record_io<Transport>` provides buffered record-layer I/O over any transport, with role-aware encryption state management (client and server use opposite key directions) and runtime cipher suite dispatch via `dispatch_cipher_suite`. `handshake_reader` handles message framing within handshake records (coalescing and fragmentation). `verify_server_key_exchange()` verifies the ServerKeyExchange signature (ECDSA or RSA) against the server's certificate public key. `compute_ecdh_exchange()` performs the full ECDHE key exchange: parse server point, validate, generate ephemeral keypair, compute shared secret, serialize client public key.
 
 ### TLS Client (`tls/client.hpp`)
 
 `tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, and an optional `hostname` for SAN/CN verification. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
 
+### TLS Server (`tls/server.hpp`)
+
+`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), EC private key, and ECDSA cipher suites to offer. The server generates an ephemeral ECDHE keypair, signs the ServerKeyExchange with its long-term ECDSA key (using RFC 6979 deterministic nonces), and completes the full handshake including ChangeCipherSpec and Finished exchange. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`. Currently supports ECDSA cipher suites only (P-256 and P-384).
+
+### Private Key Loading (`tls/private_key.hpp`)
+
+Loads EC private keys from PEM files. Handles both SEC 1 format (`EC PRIVATE KEY` label, RFC 5915) and PKCS#8 format (`PRIVATE KEY` label, RFC 5958). Uses `#embed "definitions/ecprivatekey.asn1"` and the ASN.1 codegen to parse key structures. Auto-detects curve from private key byte length (32 bytes = P-256, 48 bytes = P-384). Returns a `loaded_key` with the private scalar as a variant and the detected `NamedCurve`.
+
 ### TCP Transport (`tls/tcp_transport.hpp`)
 
-POSIX socket implementation of the `transport` concept. Constructor takes `(hostname, port)` and connects via `getaddrinfo` (IPv4/IPv6). Blocking I/O, RAII (destructor closes), move-only. `write()` loops internally to ensure all bytes are sent. `read()` returns a single `::read()` result (partial reads handled by `record_io`).
+POSIX socket implementation of the `transport` concept. `tcp_transport` takes `(hostname, port)` and connects via `getaddrinfo` (IPv4/IPv6). Blocking I/O, RAII (destructor closes), move-only. `write()` loops internally to ensure all bytes are sent. `read()` returns a single `::read()` result (partial reads handled by `record_io`). `tcp_listener` provides server-side socket listening: constructor binds and listens, `accept()` blocks until a client connects and returns a `tcp_transport` wrapping the accepted socket.
 
 ## ASN.1 Definitions
 
@@ -298,8 +308,10 @@ The test suite is comprehensive:
 | `test_hostname_verifier.cpp` | Exact/wildcard hostname matching, SAN extraction, CN fallback, verifier integration |
 | `test_tcp_transport.cpp` | Transport concept satisfaction, connection failure handling, move semantics |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
-| `tls_connect_tool.cpp` | End-to-end TLS client: connects to a server, handshakes, sends HTTP GET |
-| `test_tls_integration.sh` | Integration test: connects to 10 public sites, rejects 2 bad-cert sites |
+| `tls_connect_tool.cpp` | End-to-end TLS client: connects to a server, handshakes, sends HTTP GET. Supports `--cafile` for custom CA |
+| `tls_server_tool.cpp` | End-to-end TLS server: loads EC key + cert, listens, serves "Hello, world!" |
+| `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites |
+| `test_tls_server.sh` | Server integration test: generates PKI, tests with curl and tls_connect_tool |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
@@ -324,7 +336,7 @@ A `Containerfile` (Debian sid) provides a reproducible build environment with al
 CONTAINER_CMD=docker ./container-check.sh   # uses docker
 ```
 
-This builds from scratch inside the container and runs the full `check` target (25 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests).
+This builds from scratch inside the container and runs the full `check` target (25 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 2 TLS server tests).
 
 ## Design Philosophy
 

@@ -1,11 +1,14 @@
 /**
  * TLS 1.2 end-to-end connection tool.
  *
- * Usage: ./tls_connect_tool <hostname> [port]
+ * Usage: ./tls_connect_tool [--cafile <ca.pem>] <hostname> [port]
  *
  * Connects to a server, performs a TLS 1.2 handshake with certificate
- * and hostname verification using the Mozilla CA bundle, sends an
- * HTTP/1.1 GET request, and prints the response.
+ * and hostname verification, sends an HTTP/1.1 GET request, and prints
+ * the response.
+ *
+ * By default uses the Mozilla CA bundle. Use --cafile to specify a
+ * custom CA certificate file (e.g. for self-signed servers).
  */
 
 #include <tls/tcp_transport.hpp>
@@ -14,20 +17,58 @@
 #include <crypto/random.hpp>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string>
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::fprintf(stderr, "Usage: %s <hostname> [port]\n", argv[0]);
+    // Parse arguments
+    const char* cafile = nullptr;
+    const char* hostname_arg = nullptr;
+    const char* port_arg = nullptr;
+
+    int i = 1;
+    while (i < argc) {
+        if (std::strcmp(argv[i], "--cafile") == 0 && i + 1 < argc) {
+            cafile = argv[++i];
+            ++i;
+        } else if (!hostname_arg) {
+            hostname_arg = argv[i++];
+        } else if (!port_arg) {
+            port_arg = argv[i++];
+        } else {
+            ++i;
+        }
+    }
+
+    if (!hostname_arg) {
+        std::fprintf(stderr, "Usage: %s [--cafile <ca.pem>] <hostname> [port]\n", argv[0]);
         return 1;
     }
 
-    std::string hostname = argv[1];
-    uint16_t port = (argc >= 3) ? static_cast<uint16_t>(std::atoi(argv[2])) : 443;
+    std::string hostname = hostname_arg;
+    uint16_t port = port_arg ? static_cast<uint16_t>(std::atoi(port_arg)) : 443;
 
-    std::printf("Loading Mozilla root certificates...\n");
-    auto roots = asn1::x509::load_mozilla_roots();
-    std::printf("Loaded %zu roots\n", roots.roots.size());
+    // Load trust store
+    asn1::x509::trust_store roots;
+    if (cafile) {
+        std::printf("Loading CA certificates from %s...\n", cafile);
+        std::ifstream f(cafile);
+        if (!f) {
+            std::fprintf(stderr, "Cannot open %s\n", cafile);
+            return 1;
+        }
+        std::string pem{std::istreambuf_iterator<char>(f), {}};
+        auto blocks = asn1::pem::decode_all(pem);
+        for (auto& block : blocks) {
+            if (block.label == "CERTIFICATE")
+                roots.add(std::move(block.der));
+        }
+        std::printf("Loaded %zu CA cert(s)\n", roots.roots.size());
+    } else {
+        std::printf("Loading Mozilla root certificates...\n");
+        roots = asn1::x509::load_mozilla_roots();
+        std::printf("Loaded %zu roots\n", roots.roots.size());
+    }
 
     std::printf("Connecting to %s:%u...\n", hostname.c_str(), port);
     tls::tcp_transport conn(hostname, port);

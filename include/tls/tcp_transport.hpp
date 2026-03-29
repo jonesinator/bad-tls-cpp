@@ -22,6 +22,9 @@ namespace tls {
 class tcp_transport {
     int fd_ = -1;
 
+    explicit tcp_transport(int fd) : fd_(fd) {}
+    friend class tcp_listener;
+
 public:
     tcp_transport(const std::string& host, const std::string& port) {
         addrinfo hints{};
@@ -81,5 +84,60 @@ public:
 };
 
 static_assert(transport<tcp_transport>);
+
+class tcp_listener {
+    int fd_ = -1;
+
+public:
+    tcp_listener(const std::string& bind_addr, uint16_t port) {
+        addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_PASSIVE;
+
+        addrinfo* result = nullptr;
+        auto port_str = std::to_string(port);
+        const char* node = bind_addr.empty() ? nullptr : bind_addr.c_str();
+        if (getaddrinfo(node, port_str.c_str(), &hints, &result) != 0)
+            return;
+
+        for (auto* rp = result; rp; rp = rp->ai_next) {
+            fd_ = ::socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+            if (fd_ == -1) continue;
+
+            int opt = 1;
+            ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+            if (::bind(fd_, rp->ai_addr, rp->ai_addrlen) == 0) {
+                if (::listen(fd_, 16) == 0) break;
+            }
+            ::close(fd_);
+            fd_ = -1;
+        }
+        freeaddrinfo(result);
+    }
+
+    ~tcp_listener() { if (fd_ != -1) ::close(fd_); }
+
+    tcp_listener(const tcp_listener&) = delete;
+    tcp_listener& operator=(const tcp_listener&) = delete;
+
+    tcp_listener(tcp_listener&& o) noexcept : fd_(o.fd_) { o.fd_ = -1; }
+    tcp_listener& operator=(tcp_listener&& o) noexcept {
+        if (this != &o) {
+            if (fd_ != -1) ::close(fd_);
+            fd_ = o.fd_;
+            o.fd_ = -1;
+        }
+        return *this;
+    }
+
+    bool is_listening() const { return fd_ != -1; }
+
+    tcp_transport accept() {
+        int client_fd = ::accept(fd_, nullptr, nullptr);
+        return tcp_transport(client_fd);
+    }
+};
 
 } // namespace tls

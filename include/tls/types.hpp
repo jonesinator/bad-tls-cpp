@@ -128,9 +128,10 @@ enum class ECPointFormat : uint8_t {
 
 // TLS extension types
 enum class ExtensionType : uint16_t {
-    ec_point_formats    = 11,
-    supported_groups    = 10,  // formerly "elliptic_curves"
+    ec_point_formats     = 11,
+    supported_groups     = 10,  // formerly "elliptic_curves"
     signature_algorithms = 13,
+    renegotiation_info   = 0xFF01,  // RFC 5746
 };
 
 } // namespace tls

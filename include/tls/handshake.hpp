@@ -341,6 +341,140 @@ constexpr Finished read_finished(TlsReader& r) {
     return msg;
 }
 
+// --- Deserialization: ClientHello ---
+
+constexpr ClientHello read_client_hello(TlsReader& r) {
+    ClientHello msg;
+
+    msg.client_version.major = r.read_u8();
+    msg.client_version.minor = r.read_u8();
+
+    auto random_bytes = r.read_bytes(32);
+    for (size_t i = 0; i < 32; ++i)
+        msg.random[i] = random_bytes[i];
+
+    msg.session_id.length = r.read_u8();
+    if (msg.session_id.length > 32) throw "ClientHello: session_id too long";
+    auto sid = r.read_bytes(msg.session_id.length);
+    for (size_t i = 0; i < msg.session_id.length; ++i)
+        msg.session_id.data[i] = sid[i];
+
+    uint16_t suites_len = r.read_u16();
+    size_t num_suites = suites_len / 2;
+    for (size_t i = 0; i < num_suites; ++i)
+        msg.cipher_suites.push_back(static_cast<CipherSuite>(r.read_u16()));
+
+    uint8_t comp_len = r.read_u8();
+    for (size_t i = 0; i < comp_len; ++i)
+        msg.compression_methods.push_back(static_cast<CompressionMethod>(r.read_u8()));
+
+    // Extensions (if any remain)
+    if (!r.at_end()) {
+        uint16_t ext_len = r.read_u16();
+        auto ext_data = r.read_bytes(ext_len);
+        for (size_t i = 0; i < ext_len; ++i)
+            msg.extensions.push_back(ext_data[i]);
+    }
+
+    return msg;
+}
+
+// --- Deserialization: ClientKeyExchange (ECDHE) ---
+
+constexpr ClientKeyExchangeEcdhe read_client_key_exchange_ecdhe(TlsReader& r) {
+    ClientKeyExchangeEcdhe msg;
+    uint8_t point_len = r.read_u8();
+    auto point_data = r.read_bytes(point_len);
+    for (size_t i = 0; i < point_len; ++i)
+        msg.public_key.push_back(point_data[i]);
+    return msg;
+}
+
+// --- Serialization: ServerHello ---
+
+template <size_t Cap>
+constexpr void write_server_hello(TlsWriter<Cap>& w, const ServerHello& msg) {
+    size_t hdr_pos = w.position();
+    w.write_u8(static_cast<uint8_t>(HandshakeType::server_hello));
+    w.write_u24(0); // placeholder
+
+    size_t body_start = w.position();
+
+    w.write_u8(msg.server_version.major);
+    w.write_u8(msg.server_version.minor);
+    w.write_bytes(msg.random);
+
+    w.write_u8(msg.session_id.length);
+    w.write_bytes(std::span<const uint8_t>(msg.session_id.data.data(), msg.session_id.length));
+
+    w.write_u16(static_cast<uint16_t>(msg.cipher_suite));
+    w.write_u8(static_cast<uint8_t>(msg.compression_method));
+
+    if (msg.extensions.size() > 0)
+        w.write_bytes(std::span<const uint8_t>(msg.extensions.data.data(), msg.extensions.len));
+
+    uint32_t body_len = static_cast<uint32_t>(w.position() - body_start);
+    w.patch_u24(hdr_pos + 1, body_len);
+}
+
+// --- Serialization: Certificate ---
+
+template <size_t Cap>
+constexpr void write_certificate(TlsWriter<Cap>& w, const CertificateMessage& msg) {
+    size_t hdr_pos = w.position();
+    w.write_u8(static_cast<uint8_t>(HandshakeType::certificate));
+    w.write_u24(0); // placeholder
+
+    size_t body_start = w.position();
+
+    // Total certificates length (3 bytes) - placeholder
+    size_t certs_len_pos = w.position();
+    w.write_u24(0);
+
+    size_t certs_start = w.position();
+    for (size_t i = 0; i < msg.certificate_list.size(); ++i) {
+        auto& cert = msg.certificate_list[i];
+        w.write_u24(static_cast<uint32_t>(cert.size()));
+        w.write_bytes(std::span<const uint8_t>(cert.data.data(), cert.len));
+    }
+    w.patch_u24(certs_len_pos, static_cast<uint32_t>(w.position() - certs_start));
+
+    uint32_t body_len = static_cast<uint32_t>(w.position() - body_start);
+    w.patch_u24(hdr_pos + 1, body_len);
+}
+
+// --- Serialization: ServerKeyExchange (ECDHE) ---
+
+template <size_t Cap>
+constexpr void write_server_key_exchange_ecdhe(TlsWriter<Cap>& w, const ServerKeyExchangeEcdhe& msg) {
+    size_t hdr_pos = w.position();
+    w.write_u8(static_cast<uint8_t>(HandshakeType::server_key_exchange));
+    w.write_u24(0); // placeholder
+
+    size_t body_start = w.position();
+
+    w.write_u8(static_cast<uint8_t>(ECCurveType::named_curve));
+    w.write_u16(static_cast<uint16_t>(msg.named_curve));
+    w.write_u8(static_cast<uint8_t>(msg.public_key.size()));
+    w.write_bytes(std::span<const uint8_t>(msg.public_key.data.data(), msg.public_key.len));
+
+    w.write_u8(static_cast<uint8_t>(msg.sig_algorithm.hash));
+    w.write_u8(static_cast<uint8_t>(msg.sig_algorithm.signature));
+    w.write_u16(static_cast<uint16_t>(msg.signature.size()));
+    w.write_bytes(std::span<const uint8_t>(msg.signature.data.data(), msg.signature.len));
+
+    uint32_t body_len = static_cast<uint32_t>(w.position() - body_start);
+    w.patch_u24(hdr_pos + 1, body_len);
+}
+
+// --- Serialization: ServerHelloDone ---
+
+template <size_t Cap>
+constexpr void write_server_hello_done(TlsWriter<Cap>& w) {
+    w.write_u8(static_cast<uint8_t>(HandshakeType::server_hello_done));
+    w.write_u24(0); // empty body
+}
+
 // --- Change Cipher Spec ---
 
 inline constexpr uint8_t CHANGE_CIPHER_SPEC_MESSAGE = 1;
