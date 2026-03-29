@@ -1,64 +1,64 @@
-# asn1
+# bad-tls-cpp
 
 A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, elliptic curve cryptography (ECC), and TLS 1.2. Everything is constexpr — the entire pipeline from ASN.1 schema parsing through cryptographic operations and TLS record protection can execute at compile time. Designed for educational purposes, prioritizing clarity over performance.
 
 ## Project Structure
 
 ```
-asn1/
-├── CMakeLists.txt
-├── definitions/
-│   ├── ecprivatekey.asn1        # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
-│   └── x509.asn1               # ASN.1 schema for X.509 certificates (RFC 5280)
-├── include/
-│   ├── asn1/                    # Pure ASN.1 parsing + DER encoding (no crypto dependency)
-│   │   ├── ast.hpp              # Abstract Syntax Tree nodes
-│   │   ├── lexer.hpp            # Constexpr tokenizer
-│   │   ├── parser.hpp           # Recursive descent parser
-│   │   ├── pem.hpp              # PEM encode/decode
-│   │   ├── based.hpp            # Base16/32/64 (RFC 4648)
-│   │   ├── fixed_string.hpp     # Fixed-capacity string for constexpr
-│   │   ├── fixed_vector.hpp     # Fixed-capacity vector for constexpr
-│   │   └── der/
-│   │       ├── types.hpp        # DER primitive types
-│   │       ├── tag.hpp          # Tag utilities
-│   │       ├── reader.hpp       # DER binary decoder
-│   │       ├── writer.hpp       # DER binary encoder
-│   │       └── codegen.hpp      # C++ type generation from ASN.1
-│   ├── number/                  # Fixed-width big integer arithmetic (standalone)
-│   │   └── number.hpp           # number<TDigit, NDigits> with full arithmetic
-│   ├── crypto/                  # Cryptographic algorithms (depends on number/)
-│   │   ├── ecc.hpp              # Elliptic curve field/point arithmetic
-│   │   ├── ecdsa.hpp            # ECDSA signing/verification (RFC 6979)
-│   │   ├── ecdh.hpp             # ECDH key agreement
-│   │   ├── sha2.hpp             # SHA-2 family (FIPS 180-4)
-│   │   ├── hmac.hpp             # HMAC (RFC 2104)
-│   │   ├── hkdf.hpp             # HKDF (RFC 5869)
-│   │   ├── aes.hpp              # AES block cipher (FIPS 197)
-│   │   ├── gcm.hpp              # GCM authenticated encryption (SP 800-38D)
-│   │   ├── tls_prf.hpp          # TLS 1.2 PRF (RFC 5246)
-│   │   ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
-│   │   ├── random.hpp           # Random number generation (concept + impls)
-│   │   ├── hash_concept.hpp     # Hash function concept
+bad-tls-cpp/
+├── CMakeLists.txt                    # Build configuration
+├── definitions/                      # Directory for ASN.1 schema files
+│   ├── ecprivatekey.asn1             # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
+│   └── x509.asn1                     # ASN.1 schema for X.509 certificates (RFC 5280)
+├── include/                          # Root of library headers
+│   ├── asn1/                         # Pure ASN.1 parsing + DER encoding (no crypto dependency)
+│   │   ├── ast.hpp                   # Abstract Syntax Tree nodes
+│   │   ├── lexer.hpp                 # Constexpr tokenizer
+│   │   ├── parser.hpp                # Recursive descent parser
+│   │   ├── pem.hpp                   # PEM encode/decode
+│   │   ├── based.hpp                 # Base16/32/64 (RFC 4648)
+│   │   ├── fixed_string.hpp          # Fixed-capacity string for constexpr
+│   │   ├── fixed_vector.hpp          # Fixed-capacity vector for constexpr
+│   │   └── der/                      # ASN.1 DER encoding
+│   │       ├── types.hpp             # DER primitive types
+│   │       ├── tag.hpp               # Tag utilities
+│   │       ├── reader.hpp            # DER binary decoder
+│   │       ├── writer.hpp            # DER binary encoder
+│   │       └── codegen.hpp           # C++ type generation from ASN.1
+│   ├── number/                       # Fixed-width big integer arithmetic (standalone)
+│   │   └── number.hpp                # number<TDigit, NDigits> with full arithmetic
+│   ├── crypto/                       # Cryptographic algorithms (depends on number/)
+│   │   ├── ecc.hpp                   # Elliptic curve field/point arithmetic
+│   │   ├── ecdsa.hpp                 # ECDSA signing/verification (RFC 6979)
+│   │   ├── ecdh.hpp                  # ECDH key agreement
+│   │   ├── sha2.hpp                  # SHA-2 family (FIPS 180-4)
+│   │   ├── hmac.hpp                  # HMAC (RFC 2104)
+│   │   ├── hkdf.hpp                  # HKDF (RFC 5869)
+│   │   ├── aes.hpp                   # AES block cipher (FIPS 197)
+│   │   ├── gcm.hpp                   # GCM authenticated encryption (SP 800-38D)
+│   │   ├── tls_prf.hpp               # TLS 1.2 PRF (RFC 5246)
+│   │   ├── rsa.hpp                   # RSA-PSS signing/verification (RFC 8017)
+│   │   ├── random.hpp                # Random number generation (concept + impls)
+│   │   ├── hash_concept.hpp          # Hash function concept
 │   │   └── block_cipher_concept.hpp  # Block cipher concept
-│   ├── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
-│   │   ├── verify.hpp           # Chain verification, key extraction, sig verify
-│   │   ├── trust_store.hpp      # Trusted root certificate store
-│   │   ├── mozilla_roots.hpp    # Mozilla CA bundle (145 roots, embedded via #embed)
-│   │   └── hostname_verifier.hpp # Hostname verification (RFC 6125/2818)
-│   └── tls/                     # TLS 1.2 client (depends on crypto/ + x509/)
-│       ├── types.hpp            # Wire enums, ProtocolVersion, CipherSuite, etc.
-│       ├── record.hpp           # TlsReader/TlsWriter, record framing
-│       ├── handshake.hpp        # Handshake message structs + serialization
-│       ├── cipher_suite.hpp     # Cipher suite parameters and type-level traits
-│       ├── key_schedule.hpp     # Master secret, key expansion, verify_data
-│       ├── record_protection.hpp # AES-GCM record encrypt/decrypt (RFC 5288)
-│       ├── transcript.hpp       # Handshake transcript hash accumulator
-│       ├── transport.hpp        # Transport concept + memory_transport mock
-│       ├── connection.hpp       # Record I/O, SKE verification, ECDH helpers
-│       ├── client.hpp           # tls_client handshake state machine
-│       └── tcp_transport.hpp    # POSIX TCP socket transport
-└── tests/                       # Comprehensive test suite
+│   ├── x509/                         # X.509 certificate verification (depends on asn1/ + crypto/)
+│   │   ├── verify.hpp                # Chain verification, key extraction, sig verify
+│   │   ├── trust_store.hpp           # Trusted root certificate store
+│   │   ├── mozilla_roots.hpp         # Mozilla CA bundle (145 roots, embedded via #embed)
+│   │   └── hostname_verifier.hpp     # Hostname verification (RFC 6125/2818)
+│   └── tls/                          # TLS 1.2 client (depends on crypto/ + x509/)
+│       ├── types.hpp                 # Wire enums, ProtocolVersion, CipherSuite, etc.
+│       ├── record.hpp                # TlsReader/TlsWriter, record framing
+│       ├── handshake.hpp             # Handshake message structs + serialization
+│       ├── cipher_suite.hpp          # Cipher suite parameters and type-level traits
+│       ├── key_schedule.hpp          # Master secret, key expansion, verify_data
+│       ├── record_protection.hpp     # AES-GCM record encrypt/decrypt (RFC 5288)
+│       ├── transcript.hpp            # Handshake transcript hash accumulator
+│       ├── transport.hpp             # Transport concept + memory_transport mock
+│       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
+│       ├── client.hpp                # tls_client handshake state machine
+│       └── tcp_transport.hpp         # POSIX TCP socket transport
+└── tests/                            # Comprehensive test suite
 ```
 
 The five modules form a strict dependency DAG:
