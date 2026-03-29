@@ -16,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace tls {
 
@@ -90,7 +91,8 @@ struct Finished {
 
 // --- Extension helpers ---
 
-// Build the mandatory ClientHello extensions for ECDHE:
+// Build the ClientHello extensions for ECDHE:
+//   - server_name / SNI (RFC 6066 Section 3) — if hostname provided
 //   - supported_groups (RFC 4492 Section 5.1.1)
 //   - ec_point_formats (RFC 4492 Section 5.1.2)
 //   - signature_algorithms (RFC 5246 Section 7.4.1.4.1)
@@ -98,12 +100,28 @@ template <size_t Cap>
 constexpr void write_client_hello_extensions(
     TlsWriter<Cap>& w,
     std::span<const NamedCurve> curves,
-    std::span<const SignatureAndHashAlgorithm> sig_algs)
+    std::span<const SignatureAndHashAlgorithm> sig_algs,
+    std::string_view hostname = {})
 {
     // We'll write extensions into the writer, prefixed with total extensions length.
     // Save position for the outer length, then patch it.
     size_t ext_list_pos = w.position();
     w.write_u16(0); // placeholder for total extensions length
+
+    // server_name / SNI (type 0) — RFC 6066 Section 3
+    if (!hostname.empty()) {
+        w.write_u16(0); // extension type: server_name
+        // Extension data: server_name_list_length(2) + name_type(1) + name_length(2) + name
+        uint16_t name_len = static_cast<uint16_t>(hostname.size());
+        uint16_t entry_len = static_cast<uint16_t>(1 + 2 + name_len); // type + len + name
+        uint16_t list_len = static_cast<uint16_t>(2 + entry_len);     // entry_len prefix + entry
+        w.write_u16(list_len);       // extension data length
+        w.write_u16(entry_len);      // server_name_list length
+        w.write_u8(0);               // host_name type
+        w.write_u16(name_len);       // host name length
+        w.write_bytes(std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(hostname.data()), hostname.size()));
+    }
 
     // supported_groups (type 10)
     {

@@ -77,7 +77,8 @@ public:
         TlsWriter<512> ext_w;
         write_client_hello_extensions(ext_w,
             std::span<const NamedCurve>(config_.curves.data(), config_.num_curves),
-            std::span<const SignatureAndHashAlgorithm>(config_.sig_algs.data(), config_.num_sig_algs));
+            std::span<const SignatureAndHashAlgorithm>(config_.sig_algs.data(), config_.num_sig_algs),
+            config_.hostname);
         for (size_t i = 0; i < ext_w.size(); ++i)
             ch.extensions.push_back(ext_w.data()[i]);
 
@@ -224,6 +225,8 @@ private:
                     chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust);
                 }
                 if (!chain_ok) return {tls_error::bad_certificate};
+            } catch (const std::exception&) {
+                return {tls_error::bad_certificate};
             } catch (...) {
                 return {tls_error::bad_certificate};
             }

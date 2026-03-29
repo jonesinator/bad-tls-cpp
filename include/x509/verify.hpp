@@ -44,7 +44,7 @@ using Certificate = der::Mapped<X509Mod, X509Mod.find_type("Certificate")>;
 
 // --- Public key variant ---
 
-using rsa_num = number<uint32_t, 128>;  // RSA-2048 backing (4096-bit)
+using rsa_num = number<uint32_t, 256>;  // RSA-4096 backing (8192-bit)
 using uint512 = number<uint32_t, 16>;
 using uint768 = number<uint32_t, 24>;
 using p256_curve = p256<uint512>;
