@@ -1,6 +1,6 @@
 # asn1
 
-A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, and elliptic curve cryptography (ECC). Everything is constexpr — the entire pipeline from ASN.1 schema parsing through cryptographic operations can execute at compile time. Designed for educational purposes, prioritizing clarity over performance.
+A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, elliptic curve cryptography (ECC), and TLS 1.2. Everything is constexpr — the entire pipeline from ASN.1 schema parsing through cryptographic operations and TLS record protection can execute at compile time. Designed for educational purposes, prioritizing clarity over performance.
 
 ## Project Structure
 
@@ -40,13 +40,21 @@ asn1/
 │   │   ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
 │   │   ├── hash_concept.hpp     # Hash function concept
 │   │   └── block_cipher_concept.hpp  # Block cipher concept
-│   └── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
-│       ├── verify.hpp           # Chain verification, key extraction, sig verify
-│       └── trust_store.hpp      # Trusted root certificate store
+│   ├── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
+│   │   ├── verify.hpp           # Chain verification, key extraction, sig verify
+│   │   └── trust_store.hpp      # Trusted root certificate store
+│   └── tls/                     # TLS 1.2 data layer (depends on crypto/)
+│       ├── types.hpp            # Wire enums, ProtocolVersion, CipherSuite, etc.
+│       ├── record.hpp           # TlsReader/TlsWriter, record framing
+│       ├── handshake.hpp        # Handshake message structs + serialization
+│       ├── cipher_suite.hpp     # Cipher suite parameters and type-level traits
+│       ├── key_schedule.hpp     # Master secret, key expansion, verify_data
+│       ├── record_protection.hpp # AES-GCM record encrypt/decrypt (RFC 5288)
+│       └── transcript.hpp       # Handshake transcript hash accumulator
 └── tests/                       # Comprehensive test suite
 ```
 
-The four modules form a strict dependency DAG:
+The five modules form a strict dependency DAG:
 
 ```
 number (standalone)
@@ -55,6 +63,8 @@ number (standalone)
 asn1    crypto
   ↑        ↑
   └──x509──┘
+           ↑
+          tls
 ```
 
 ## The ASN.1 Layer
@@ -170,7 +180,45 @@ RSA signature signing and verification per RFC 8017. Supports both **RSA-PSS** (
 
 ### GCM (`crypto/gcm.hpp`)
 
-GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `crypto/block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation.
+GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `crypto/block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation. Runtime-length variants `gcm_encrypt_rt`/`gcm_decrypt_rt` accept `std::span` for variable-length payloads (used by TLS record protection).
+
+## The TLS 1.2 Layer (`tls/`)
+
+The TLS module implements the data layer for TLS 1.2 (RFC 5246): types, binary serialization, key derivation, and record-level encryption. It uses its own big-endian binary framing, not ASN.1 DER.
+
+### Wire Types (`tls/types.hpp`)
+
+Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (P-256, P-384), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths.
+
+### Record Layer (`tls/record.hpp`)
+
+`TlsReader` and `TlsWriter<Cap>` provide big-endian binary serialization analogous to the DER reader/writer. `TlsRecord` represents a framed record (type + version + fragment). `write_record()`/`read_record()` handle serialization. `TlsWriter` supports `patch_u16()`/`patch_u24()` for backpatching length fields after the body is written.
+
+### Handshake Messages (`tls/handshake.hpp`)
+
+Structs and serialization for all handshake message types: `ClientHello`, `ServerHello`, `CertificateMessage`, `ServerKeyExchangeEcdhe`, `ServerHelloDone`, `ClientKeyExchangeEcdhe`, `CertificateVerify`, and `Finished`. Client-sent messages have `write_*` functions; server-sent messages have `read_*` functions. Extension helpers build the mandatory ClientHello extensions (supported_groups, ec_point_formats, signature_algorithms).
+
+### Cipher Suite Definitions (`tls/cipher_suite.hpp`)
+
+Maps the four supported cipher suites to algorithm parameters and C++ types. `CipherSuiteParams` provides runtime-queryable sizes. `cipher_suite_traits<Suite>` provides compile-time type mappings. `dispatch_cipher_suite()` bridges runtime selection to compile-time dispatch.
+
+Supported suites:
+- `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256` (0xC02F)
+- `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384` (0xC030)
+- `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256` (0xC02B)
+- `TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384` (0xC02C)
+
+### Key Schedule (`tls/key_schedule.hpp`)
+
+Master secret derivation, key block expansion, and Finished verify_data computation using the existing TLS PRF from `crypto/tls_prf.hpp`. `derive_master_secret()` implements RFC 5246 Section 8.1. `derive_key_block()` implements Section 6.3 (note: seed order is reversed vs. master secret derivation). `compute_verify_data()` implements Section 7.4.9.
+
+### Record Protection (`tls/record_protection.hpp`)
+
+AES-GCM record encryption and decryption per RFC 5288. `build_nonce()` constructs the 12-byte GCM nonce from a 4-byte fixed IV and 8-byte sequence number. `build_additional_data()` constructs the 13-byte AAD. `encrypt_record()` produces `explicit_nonce || ciphertext || tag`. `decrypt_record()` returns `std::optional` — `std::nullopt` on authentication failure.
+
+### Transcript Hash (`tls/transcript.hpp`)
+
+A thin wrapper around any `hash_function` for accumulating handshake messages. `TranscriptHash<THash>` supports `update()`, non-destructive `current_hash()` (finalizes a copy), and `finalize()`.
 
 ## ASN.1 Definitions
 
@@ -200,6 +248,11 @@ The test suite is comprehensive:
 | `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
 | `test_x509.cpp` | X.509 certificate parsing, field extraction, RDN access, extension parsing |
 | `test_x509_verify.cpp` | Certificate chain verification, TBS extraction, key extraction, trust store |
+| `test_tls_types.cpp` | TLS wire enum values, ProtocolVersion, SessionId, SignatureAndHashAlgorithm |
+| `test_tls_record.cpp` | TlsReader/TlsWriter roundtrips, record framing, incomplete records, sub-readers |
+| `test_tls_handshake.cpp` | ClientHello serialization, ServerHello/Certificate/SKE parsing, Finished roundtrip |
+| `test_tls_key_schedule.cpp` | Master secret derivation, key block expansion, verify_data, transcript hash |
+| `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
@@ -217,4 +270,4 @@ ctest --test-dir build
 
 ## Design Philosophy
 
-The library is organized into four modules with clean dependency boundaries: `asn1/` (pure parsing, no crypto), `number/` (standalone big integers), `crypto/` (cryptographic algorithms built on `number/`), and `x509/` (certificate verification combining `asn1/` and `crypto/`). Within each module, the code is layered bottom-up: containers → lexer → parser → AST → DER codec → codegen → PEM, and separately: big integers → field elements → curve points → ECDSA/ECDH, with SHA-2 → HMAC → HKDF as the hash stack. Everything is header-only, template-heavy, and constexpr. The goal is educational — demonstrating how ASN.1, DER, and ECC work from first principles in modern C++, with the novel twist that the entire pipeline can run at compile time.
+The library is organized into five modules with clean dependency boundaries: `asn1/` (pure parsing, no crypto), `number/` (standalone big integers), `crypto/` (cryptographic algorithms built on `number/`), `x509/` (certificate verification combining `asn1/` and `crypto/`), and `tls/` (TLS 1.2 data layer built on `crypto/`). Within each module, the code is layered bottom-up: containers → lexer → parser → AST → DER codec → codegen → PEM, and separately: big integers → field elements → curve points → ECDSA/ECDH, with SHA-2 → HMAC → HKDF as the hash stack. Everything is header-only, template-heavy, and constexpr. The goal is educational — demonstrating how ASN.1, DER, ECC, and TLS work from first principles in modern C++, with the novel twist that the entire pipeline can run at compile time.

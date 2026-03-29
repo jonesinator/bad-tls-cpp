@@ -241,4 +241,94 @@ constexpr std::optional<std::array<uint8_t, N>> gcm_decrypt(
     return plaintext;
 }
 
+// --- Runtime-length GCM Encrypt ---
+// Encrypts plaintext of runtime-determined length.
+// out_ciphertext must have space for plaintext.size() bytes.
+// Returns the 16-byte authentication tag.
+
+template <block_cipher Cipher>
+constexpr std::array<uint8_t, 16> gcm_encrypt_rt(
+    std::span<const uint8_t, Cipher::key_size> key,
+    std::span<const uint8_t> iv,
+    std::span<const uint8_t> plaintext,
+    std::span<const uint8_t> aad,
+    std::span<uint8_t> out_ciphertext) noexcept
+{
+    static_assert(Cipher::block_size == 16, "GCM requires a 128-bit block cipher");
+
+    Cipher cipher;
+    cipher.init(key);
+
+    std::array<uint8_t, 16> zero{};
+    auto H = cipher.encrypt_block(zero);
+    auto j0 = gcm_detail::compute_j0(H, iv);
+
+    auto counter = j0;
+    size_t offset = 0;
+    while (offset < plaintext.size()) {
+        gcm_detail::inc32(counter);
+        auto keystream = cipher.encrypt_block(counter);
+        size_t block_len = (plaintext.size() - offset < 16) ? plaintext.size() - offset : 16;
+        for (size_t i = 0; i < block_len; ++i)
+            out_ciphertext[offset + i] = plaintext[offset + i] ^ keystream[i];
+        offset += block_len;
+    }
+
+    auto ghash_val = gcm_detail::ghash(H, aad,
+        std::span<const uint8_t>(out_ciphertext.data(), plaintext.size()));
+    auto encrypted_j0 = cipher.encrypt_block(j0);
+    gcm_detail::xor_block(ghash_val, encrypted_j0);
+
+    return ghash_val;
+}
+
+// --- Runtime-length GCM Decrypt ---
+// Decrypts ciphertext of runtime-determined length.
+// out_plaintext must have space for ciphertext.size() bytes.
+// Returns true on successful tag verification, false otherwise.
+
+template <block_cipher Cipher>
+constexpr bool gcm_decrypt_rt(
+    std::span<const uint8_t, Cipher::key_size> key,
+    std::span<const uint8_t> iv,
+    std::span<const uint8_t> ciphertext,
+    std::span<const uint8_t> aad,
+    std::span<const uint8_t, 16> tag,
+    std::span<uint8_t> out_plaintext) noexcept
+{
+    static_assert(Cipher::block_size == 16, "GCM requires a 128-bit block cipher");
+
+    Cipher cipher;
+    cipher.init(key);
+
+    std::array<uint8_t, 16> zero{};
+    auto H = cipher.encrypt_block(zero);
+    auto j0 = gcm_detail::compute_j0(H, iv);
+
+    // Verify tag first
+    auto ghash_val = gcm_detail::ghash(H, aad, ciphertext);
+    auto encrypted_j0 = cipher.encrypt_block(j0);
+    gcm_detail::xor_block(ghash_val, encrypted_j0);
+
+    std::array<uint8_t, 16> expected_tag{};
+    for (int i = 0; i < 16; ++i) expected_tag[i] = tag[i];
+
+    if (!gcm_detail::constant_time_equal(ghash_val, expected_tag))
+        return false;
+
+    // CTR decryption
+    auto counter = j0;
+    size_t offset = 0;
+    while (offset < ciphertext.size()) {
+        gcm_detail::inc32(counter);
+        auto keystream = cipher.encrypt_block(counter);
+        size_t block_len = (ciphertext.size() - offset < 16) ? ciphertext.size() - offset : 16;
+        for (size_t i = 0; i < block_len; ++i)
+            out_plaintext[offset + i] = ciphertext[offset + i] ^ keystream[i];
+        offset += block_len;
+    }
+
+    return true;
+}
+
 #endif /* GCM_HPP_ */
