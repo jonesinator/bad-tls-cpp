@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <stdexcept>
 
 static_assert(block_cipher<aes128>);
 static_assert(block_cipher<aes192>);
@@ -116,10 +117,15 @@ constexpr std::array<uint8_t, 16> ghash(
 }
 
 // Compute J0 from IV (SP 800-38D Section 7.1).
+// IV must be non-empty and at most 2^61 bytes (so bit length fits in uint64_t).
 constexpr std::array<uint8_t, 16> compute_j0(
     const std::array<uint8_t, 16>& H,
-    std::span<const uint8_t> iv) noexcept
+    std::span<const uint8_t> iv)
 {
+    if (iv.empty())
+        throw std::invalid_argument{"GCM IV must not be empty"};
+    if (iv.size() > (uint64_t{1} << 61))
+        throw std::invalid_argument{"GCM IV exceeds maximum length"};
     std::array<uint8_t, 16> j0{};
     if (iv.size() == 12) {
         for (int i = 0; i < 12; ++i) j0[i] = iv[i];

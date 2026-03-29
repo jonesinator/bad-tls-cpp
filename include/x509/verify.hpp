@@ -84,7 +84,10 @@ inline auto extract_tbs_der(std::span<const uint8_t> cert_der) -> std::span<cons
     der::Reader r{cert_der};
     r.read_header();  // Skip outer Certificate SEQUENCE header
     auto tbs = r.peek_header();  // Peek at TBSCertificate header
-    return cert_der.subspan(r.position(), tbs.header_size + tbs.length);
+    size_t tbs_total = tbs.header_size + tbs.length;
+    if (r.position() + tbs_total > cert_der.size())
+        throw std::runtime_error{"TBSCertificate extends beyond certificate DER"};
+    return cert_der.subspan(r.position(), tbs_total);
 }
 
 // --- Parse certificate from DER ---

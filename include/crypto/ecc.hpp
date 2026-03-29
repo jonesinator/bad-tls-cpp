@@ -16,6 +16,7 @@
 #define ECC_HPP_
 
 #include <number/number.hpp>
+#include <stdexcept>
 
 /**
  * An element of the prime field F_p, where p is determined by the curve type TCurve.
@@ -78,12 +79,14 @@ public:
         return *this;
     }
 
-    constexpr field_element operator/(const field_element& rhs) const noexcept {
-        return *this * field_element(
-            rhs.value_.inv_mod(TCurve::p()).value_or(number_type(0U)), raw{});
+    constexpr field_element operator/(const field_element& rhs) const {
+        auto inv = rhs.value_.inv_mod(TCurve::p());
+        if (!inv)
+            throw std::domain_error{"field_element division by zero or non-invertible element"};
+        return *this * field_element(*inv, raw{});
     }
 
-    constexpr field_element& operator/=(const field_element& rhs) noexcept {
+    constexpr field_element& operator/=(const field_element& rhs) {
         *this = *this / rhs;
         return *this;
     }

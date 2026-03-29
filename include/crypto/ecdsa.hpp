@@ -175,6 +175,9 @@ constexpr bool ecdsa_verify(
     const num n = TCurve::n();
     const num zero(0U);
 
+    // Reject invalid public keys
+    if (public_key.is_infinity() || !public_key.on_curve()) return false;
+
     // Check r, s in [1, n-1]
     if (sig.r == zero || sig.r >= n) return false;
     if (sig.s == zero || sig.s >= n) return false;
