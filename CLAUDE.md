@@ -25,15 +25,15 @@ Five modules with a strict dependency DAG (`number` ← `asn1`, `crypto` ← `x5
 - **`include/number/`** — Fixed-width big integer arithmetic (`number<TDigit, NDigits>`). Standalone, no dependencies on other modules.
 - **`include/crypto/`** — Cryptographic algorithms built on `number/`. ECC (field elements, curve points, ECDSA, ECDH), hashing (SHA-2, HMAC, HKDF, TLS PRF), symmetric encryption (AES, GCM), RSA-PSS signatures, and random number generation (`random_generator` concept with `system_random` CSPRNG and `xoshiro256ss` constexpr PRNG).
 - **`include/x509/`** — X.509 certificate chain verification. Depends on both `asn1/` (parsing) and `crypto/` (signature verification). Provides a modular `certificate_verifier` concept for custom policies. Includes Mozilla's root CA bundle (145 certs) embedded via `#embed` and loaded at runtime with `load_mozilla_roots()`.
-- **`include/tls/`** — TLS 1.2 client implementation. Transport abstraction (`transport` concept), record framing, handshake message types, cipher suite definitions, key schedule, AES-GCM record protection, transcript hashing, buffered record I/O with encryption state, ServerKeyExchange signature verification, ECDH integration, and the `tls_client<Transport, RNG>` handshake state machine with application data send/receive. Depends on `crypto/` and `x509/`. Supports four ECDHE+AES-GCM cipher suites.
+- **`include/tls/`** — TLS 1.2 client and server. Transport abstraction (`transport` concept with `tcp_transport` and `tcp_listener`), record framing, handshake message types (including CertificateRequest for mTLS), cipher suite definitions, key schedule (standard and Extended Master Secret per RFC 7627), AES-GCM record protection, transcript hashing, role-aware buffered record I/O, ECDH integration, ECDSA signing for ServerKeyExchange and CertificateVerify, private key loading from PEM (SEC 1 and PKCS#8), and both `tls_client<Transport, RNG>` and `tls_server<Transport, RNG>` handshake state machines with mutual TLS support. Depends on `crypto/` and `x509/`. Supports four ECDHE+AES-GCM cipher suites (ECDSA and RSA, AES-128/256).
 
 The `number/` headers are also available at `/home/aaron/projects/number` as a separate working directory.
 
 ## Key Patterns
 
-### Everything is constexpr
+### Constexpr where possible
 
-All types and functions are constexpr. ASN.1 schemas are embedded via `#embed` and parsed at compile time. The `FixedString<Cap>` and `FixedVector<T, Cap>` types exist because `std::string`/`std::vector` cannot persist across constexpr boundaries. When adding new functionality, maintain constexpr compatibility.
+The core modules (asn1, number, crypto) are fully constexpr — ASN.1 schemas are embedded via `#embed` and parsed at compile time. The `FixedString<Cap>` and `FixedVector<T, Cap>` types exist because `std::string`/`std::vector` cannot persist across constexpr boundaries. The TLS and x509 modules use `std::vector` and runtime I/O, so they are not constexpr. When adding new functionality in the core modules, maintain constexpr compatibility.
 
 ### Template-driven type mapping
 
@@ -55,8 +55,9 @@ Reader/Writer follow Tag-Length-Value structure. Writer uses a `write_constructe
 
 - No external dependencies. Only the C++ standard library.
 - No dynamic allocation in constexpr paths — use `FixedString`/`FixedVector` with sufficient capacity.
-- RFC compliance matters: ECDSA uses RFC 6979 deterministic k, HMAC follows RFC 2104, HKDF follows RFC 5869, base encodings follow RFC 4648. When modifying crypto code, verify against the relevant RFC.
+- RFC compliance matters: ECDSA uses RFC 6979 deterministic k (with bits2int truncation per Section 2.3.2 for cross-size hash/curve combinations), HMAC follows RFC 2104, HKDF follows RFC 5869, base encodings follow RFC 4648, Extended Master Secret follows RFC 7627. When modifying crypto code, verify against the relevant RFC.
 - Low-S normalization is applied in ECDSA for OpenSSL interop. Do not remove it.
+- The TLS server includes the `renegotiation_info` extension (RFC 5746) in ServerHello, and the client includes both `renegotiation_info` and `extended_master_secret` (RFC 7627) in ClientHello. These are required by OpenSSL 3.x.
 - Tests use `assert()` and compile-time `static_assert` — not a test framework.
 - Educational clarity over performance. Scalar multiplication is simple double-and-add, not windowed NAF.
 
@@ -71,6 +72,8 @@ Reader/Writer follow Tag-Length-Value structure. Writer uses a `write_constructe
 **Adding a new block cipher**: Follow the `aes.hpp` pattern — `consteval` table generation in a detail namespace, a `_state<KeyBits>` struct with `init(key)`, `encrypt_block()`, `decrypt_block()`, type aliases, and one-shot convenience functions. Ensure the type satisfies the `block_cipher` concept from `block_cipher_concept.hpp` so it works with GCM automatically.
 
 **Adding a TLS cipher suite**: Add the `CipherSuite` enum value in `tls/types.hpp`, add a case to `get_cipher_suite_params()` and `dispatch_cipher_suite()` in `tls/cipher_suite.hpp`, and add a `cipher_suite_traits<>` specialization mapping to the concrete cipher and hash types.
+
+**Adding mTLS support to a tool**: The client needs `client_config::client_certificate_chain` (DER bytes), `client_private_key` (ec_private_key variant), and `client_key_curve`. Load via `load_ec_private_key()` from `tls/private_key.hpp` and `pem::decode_all()`. The server needs `server_config::client_ca` (trust_store pointer) and optionally `require_client_cert`. Use `server.client_authenticated()` to check if the client presented a valid certificate.
 
 **Debugging constexpr failures**: Constexpr errors surface as compile errors. Look for `throw` statements in constexpr code — these become compile-time error messages (e.g., `ParseError`, `DecodeError`). The thrown string literal is the diagnostic.
 

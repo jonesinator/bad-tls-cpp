@@ -1,6 +1,6 @@
 # bad-tls-cpp
 
-A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, elliptic curve cryptography (ECC), and TLS 1.2. Everything is constexpr — the entire pipeline from ASN.1 schema parsing through cryptographic operations and TLS record protection can execute at compile time. Designed for educational purposes, prioritizing clarity over performance.
+A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, elliptic curve cryptography (ECC), and TLS 1.2 with mutual TLS (mTLS) support. The core modules (ASN.1, big integers, crypto) are fully constexpr — ASN.1 schema parsing through cryptographic operations can execute at compile time. The TLS and X.509 modules operate at runtime. Designed for educational purposes, prioritizing clarity over performance.
 
 ## Project Structure
 
@@ -235,7 +235,7 @@ Supported suites:
 
 ### Key Schedule (`tls/key_schedule.hpp`)
 
-Master secret derivation, key block expansion, and Finished verify_data computation using the existing TLS PRF from `crypto/tls_prf.hpp`. `derive_master_secret()` implements RFC 5246 Section 8.1. `derive_key_block()` implements Section 6.3 (note: seed order is reversed vs. master secret derivation). `compute_verify_data()` implements Section 7.4.9.
+Master secret derivation, key block expansion, and Finished verify_data computation using the existing TLS PRF from `crypto/tls_prf.hpp`. `derive_master_secret()` implements RFC 5246 Section 8.1. `derive_extended_master_secret()` implements RFC 7627 (Extended Master Secret), using the session hash instead of client/server randoms — negotiated via the `extended_master_secret` ClientHello extension and required by OpenSSL 3.x for client certificate connections. `derive_key_block()` implements Section 6.3 (note: seed order is reversed vs. master secret derivation). `compute_verify_data()` implements Section 7.4.9.
 
 ### Record Protection (`tls/record_protection.hpp`)
 
@@ -308,11 +308,11 @@ The test suite is comprehensive:
 | `test_hostname_verifier.cpp` | Exact/wildcard hostname matching, SAN extraction, CN fallback, verifier integration |
 | `test_tcp_transport.cpp` | Transport concept satisfaction, connection failure handling, move semantics |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
-| `tls_connect_tool.cpp` | End-to-end TLS client: connects to a server, handshakes, sends HTTP GET. Supports `--cafile` for custom CA |
-| `tls_server_tool.cpp` | End-to-end TLS server: loads EC key + cert, listens, serves "Hello, world!" |
+| `tls_connect_tool.cpp` | End-to-end TLS client with `--cafile`, `--cert`, `--key` for custom CA and mTLS |
+| `tls_server_tool.cpp` | End-to-end TLS server with `--client-ca` and `--require-client-cert` for mTLS |
 | `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites |
-| `test_tls_server.sh` | Server integration test: generates PKI, tests with curl and tls_connect_tool |
-| `test_tls_openssl_server.sh` | Third-party server test: our client connects to openssl s_server (TLS + mTLS) |
+| `test_tls_server.sh` | Server integration test: basic TLS per cipher suite, optional/required mTLS with curl and tls_connect_tool |
+| `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
@@ -337,8 +337,8 @@ A `Containerfile` (Debian sid) provides a reproducible build environment with al
 CONTAINER_CMD=docker ./container-check.sh   # uses docker
 ```
 
-This builds from scratch inside the container and runs the full `check` target (25 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 2 TLS server tests).
+This builds from scratch inside the container and runs the full `check` target (25 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 9 TLS server tests, 4 OpenSSL server interop tests).
 
 ## Design Philosophy
 
-The library is organized into five modules with clean dependency boundaries: `asn1/` (pure parsing, no crypto), `number/` (standalone big integers), `crypto/` (cryptographic algorithms built on `number/`), `x509/` (certificate verification combining `asn1/` and `crypto/`), and `tls/` (TLS 1.2 data layer built on `crypto/`). Within each module, the code is layered bottom-up: containers → lexer → parser → AST → DER codec → codegen → PEM, and separately: big integers → field elements → curve points → ECDSA/ECDH, with SHA-2 → HMAC → HKDF as the hash stack. Everything is header-only, template-heavy, and constexpr. The goal is educational — demonstrating how ASN.1, DER, ECC, and TLS work from first principles in modern C++, with the novel twist that the entire pipeline can run at compile time.
+The library is organized into five modules with clean dependency boundaries: `asn1/` (pure parsing, no crypto), `number/` (standalone big integers), `crypto/` (cryptographic algorithms built on `number/`), `x509/` (certificate verification combining `asn1/` and `crypto/`), and `tls/` (TLS 1.2 client and server built on `crypto/` and `x509/`). Within each module, the code is layered bottom-up: containers → lexer → parser → AST → DER codec → codegen → PEM, and separately: big integers → field elements → curve points → ECDSA/ECDH, with SHA-2 → HMAC → HKDF as the hash stack. Everything is header-only and template-heavy. The core modules (asn1, number, crypto) are fully constexpr; the TLS and x509 modules use runtime I/O and `std::vector`. The goal is educational — demonstrating how ASN.1, DER, ECC, and TLS work from first principles in modern C++.
