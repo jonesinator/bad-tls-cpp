@@ -11,7 +11,10 @@
 #pragma once
 
 #include "connection.hpp"
+#include "private_key.hpp"
+#include <crypto/ecdsa.hpp>
 #include <crypto/random.hpp>
+#include <asn1/der/codegen.hpp>
 #include <x509/hostname_verifier.hpp>
 #include <x509/trust_store.hpp>
 #include <vector>
@@ -43,6 +46,11 @@ struct client_config {
 
     // Optional hostname for SAN/CN verification (empty to skip)
     std::string_view hostname;
+
+    // Client certificate for mTLS (empty span = no client cert)
+    std::span<const std::vector<uint8_t>> client_certificate_chain;
+    ec_private_key client_private_key;
+    NamedCurve client_key_curve = NamedCurve::secp256r1;
 };
 
 template <transport Transport, random_generator RNG>
@@ -121,6 +129,21 @@ public:
         server_random_ = server_hello.random;
         negotiated_suite_ = server_hello.cipher_suite;
 
+        // Check if server echoed extended_master_secret extension
+        bool use_ems = false;
+        if (server_hello.extensions.size() > 0) {
+            TlsReader ext_r(std::span<const uint8_t>(
+                server_hello.extensions.data.data(), server_hello.extensions.len));
+            while (ext_r.remaining() >= 4) {
+                uint16_t ext_type = ext_r.read_u16();
+                uint16_t ext_len = ext_r.read_u16();
+                if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret)) {
+                    use_ems = true;
+                }
+                if (ext_len > 0) ext_r.read_bytes(ext_len);
+            }
+        }
+
         // Collect any leftover bytes in the record (additional handshake messages)
         asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH> leftover;
         while (sh_r.remaining() > 0) {
@@ -129,7 +152,7 @@ public:
 
         // Phase 2: dispatch into templated continuation
         return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
-            return handshake_continue<Traits>(early_transcript, leftover);
+            return handshake_continue<Traits>(early_transcript, leftover, use_ems);
         });
     }
 
@@ -171,10 +194,22 @@ public:
     constexpr CipherSuite negotiated_suite() const { return negotiated_suite_; }
 
 private:
+    template <typename Num>
+    static asn1::der::Integer num_to_integer(const Num& n) {
+        auto bytes = n.to_bytes(std::endian::big);
+        size_t start = 0;
+        while (start < bytes.size() - 1 && bytes[start] == 0) ++start;
+        asn1::der::Integer result;
+        if (bytes[start] & 0x80) result.bytes.push_back(0x00);
+        result.bytes.insert(result.bytes.end(), bytes.begin() + start, bytes.end());
+        return result;
+    }
+
     template <typename Traits>
     constexpr tls_result<void> handshake_continue(
         const asn1::FixedVector<uint8_t, 4096>& early_bytes,
-        const asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>& leftover)
+        const asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>& leftover,
+        bool use_ems = false)
     {
         using Hash = typename Traits::hash_type;
 
@@ -246,14 +281,47 @@ private:
         if (!verify_server_key_exchange(ske, client_random_, server_random_, server_pub_key))
             return {tls_error::signature_verification_failed};
 
-        // --- ServerHelloDone ---
-        auto shd_msg_res = hs_reader.next_message(transcript);
-        if (!shd_msg_res) return {shd_msg_res.error};
+        // --- CertificateRequest (optional) or ServerHelloDone ---
+        bool cert_requested = false;
+        auto next_msg_res = hs_reader.next_message(transcript);
+        if (!next_msg_res) return {next_msg_res.error};
         {
-            TlsReader shd_r(shd_msg_res.value);
-            auto hdr = read_handshake_header(shd_r);
-            if (hdr.type != HandshakeType::server_hello_done)
+            TlsReader next_r(next_msg_res.value);
+            auto hdr = read_handshake_header(next_r);
+            if (hdr.type == HandshakeType::certificate_request) {
+                cert_requested = true;
+                // Parse CertificateRequest (we don't use the contents, just note it)
+                read_certificate_request(next_r);
+
+                // Now read ServerHelloDone
+                auto shd_msg_res = hs_reader.next_message(transcript);
+                if (!shd_msg_res) return {shd_msg_res.error};
+                TlsReader shd_r(shd_msg_res.value);
+                auto shd_hdr = read_handshake_header(shd_r);
+                if (shd_hdr.type != HandshakeType::server_hello_done)
+                    return {tls_error::unexpected_message};
+            } else if (hdr.type == HandshakeType::server_hello_done) {
+                // No CertificateRequest
+            } else {
                 return {tls_error::unexpected_message};
+            }
+        }
+
+        // --- Build client Certificate (if requested) ---
+        bool sent_client_cert = false;
+        TlsWriter<32768> ccert_w;
+        if (cert_requested) {
+            CertificateMessage client_cert_msg{};
+            if (!config_.client_certificate_chain.empty()) {
+                sent_client_cert = true;
+                for (auto& cert_der : config_.client_certificate_chain) {
+                    asn1::FixedVector<uint8_t, 8192> cert;
+                    for (auto b : cert_der) cert.push_back(b);
+                    client_cert_msg.certificate_list.push_back(cert);
+                }
+            }
+            write_certificate(ccert_w, client_cert_msg);
+            transcript.update(ccert_w.data());
         }
 
         // --- ECDH key exchange ---
@@ -263,18 +331,74 @@ private:
             rng_);
         if (!ecdh_res) return {ecdh_res.error};
 
-        // --- Send ClientKeyExchange ---
+        // --- Build ClientKeyExchange ---
         TlsWriter<256> cke_w;
         write_client_key_exchange_ecdhe(cke_w, ecdh_res.value.cke);
         transcript.update(cke_w.data());
+
+        // Save session hash for EMS derivation (transcript up to ClientKeyExchange)
+        auto session_hash = transcript.current_hash();
+
+        // --- Build CertificateVerify (if client cert was sent) ---
+        TlsWriter<1024> cv_w;
+        if (sent_client_cert) {
+            auto cv_hash = transcript.current_hash();
+
+            CertificateVerify cv{};
+            if constexpr (Hash::digest_size == 32) {
+                cv.algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa};
+            } else {
+                cv.algorithm = {HashAlgorithm::sha384, SignatureAlgorithm::ecdsa};
+            }
+
+            auto encode_sig = [&](const auto& sig) {
+                asn1::der::Type<detail::EccMod, "ECDSA-Sig-Value"> der_sig;
+                der_sig.template get<"r">() = num_to_integer(sig.r);
+                der_sig.template get<"s">() = num_to_integer(sig.s);
+                asn1::der::Writer dw;
+                asn1::der::encode<detail::EccMod, detail::EccMod.find_type("ECDSA-Sig-Value")>(dw, der_sig);
+                auto der_bytes = std::move(dw).finish();
+                for (auto b : der_bytes) cv.signature.push_back(b);
+            };
+
+            if (config_.client_key_curve == NamedCurve::secp256r1) {
+                auto* d = std::get_if<asn1::x509::p256_curve::number_type>(&config_.client_private_key);
+                if (!d) return {tls_error::internal_error};
+                encode_sig(ecdsa_sign<asn1::x509::p256_curve, Hash>(*d, cv_hash));
+            } else {
+                auto* d = std::get_if<asn1::x509::p384_curve::number_type>(&config_.client_private_key);
+                if (!d) return {tls_error::internal_error};
+                encode_sig(ecdsa_sign<asn1::x509::p384_curve, Hash>(*d, cv_hash));
+            }
+
+            write_certificate_verify(cv_w, cv);
+            transcript.update(cv_w.data());
+        }
+
+        // --- Send all client handshake messages together ---
+        // Sending Certificate + ClientKeyExchange + CertificateVerify without
+        // delay is important: some TLS servers (e.g. OpenSSL) read all three
+        // in sequence and may error if there's a long gap between them.
+        if (cert_requested) {
+            auto err = rio_.send_record(ContentType::handshake, ccert_w.data());
+            if (!err) return {err.error};
+        }
         auto cke_err = rio_.send_record(ContentType::handshake, cke_w.data());
         if (!cke_err) return {cke_err.error};
+        if (sent_client_cert) {
+            auto cv_err = rio_.send_record(ContentType::handshake, cv_w.data());
+            if (!cv_err) return {cv_err.error};
+        }
 
         // --- Key derivation ---
         auto& pms = ecdh_res.value.pms;
-        auto master = derive_master_secret<Hash>(
-            std::span<const uint8_t>(pms.data.data(), pms.length),
-            client_random_, server_random_);
+        auto pms_span = std::span<const uint8_t>(pms.data.data(), pms.length);
+        std::array<uint8_t, 48> master;
+        if (use_ems) {
+            master = derive_extended_master_secret<Hash>(pms_span, session_hash);
+        } else {
+            master = derive_master_secret<Hash>(pms_span, client_random_, server_random_);
+        }
         master_secret_ = master;
 
         auto params = get_cipher_suite_params(negotiated_suite_);

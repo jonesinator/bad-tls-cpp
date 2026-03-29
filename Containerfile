@@ -1,4 +1,4 @@
-FROM debian:sid
+FROM debian:sid AS base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -11,9 +11,14 @@ RUN apt-get update && \
         python3 && \
     rm -rf /var/lib/apt/lists/*
 
+FROM base AS build
+
 WORKDIR /src
 COPY . .
 
-RUN cmake -B build -G Ninja -DSTATIC_TOOLS=ON
+RUN cmake -B build -G Ninja
 RUN cmake --build build
+
+FROM build AS check
+
 RUN cmake --build build --target check

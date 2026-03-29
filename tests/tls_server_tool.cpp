@@ -1,16 +1,24 @@
 /**
  * TLS 1.2 server tool.
  *
- * Usage: ./tls_server_tool <cert.pem> <key.pem> [bind_addr] [port]
+ * Usage: ./tls_server_tool [options] <cert.pem> <key.pem> [bind_addr] [port]
+ *
+ * Options:
+ *   --client-ca <ca.pem>      Request and verify client certificates (mTLS)
+ *   --require-client-cert     Reject clients without certificates (requires --client-ca)
  *
  * Loads an EC private key and certificate chain from PEM files,
- * listens for TLS connections, and serves "Hello, world!\n" to each client.
+ * listens for TLS connections, and serves responses to each client.
+ * With mTLS: "Hello, secure!\n" for authenticated clients,
+ * "Hello, insecure!\n" for unauthenticated clients.
+ * Without mTLS: "Hello, world!\n" for all clients.
  */
 
 #include <tls/tcp_transport.hpp>
 #include <tls/server.hpp>
 #include <tls/private_key.hpp>
 #include <asn1/pem.hpp>
+#include <x509/trust_store.hpp>
 #include <crypto/random.hpp>
 #include <csignal>
 #include <cstdio>
@@ -33,15 +41,46 @@ static std::string read_file(const char* path) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        std::fprintf(stderr, "Usage: %s <cert.pem> <key.pem> [bind_addr] [port]\n", argv[0]);
+    std::setbuf(stdout, nullptr);
+
+    // Parse options
+    const char* client_ca_path = nullptr;
+    bool require_client_cert = false;
+    const char* cert_path = nullptr;
+    const char* key_path = nullptr;
+    const char* bind_addr_arg = nullptr;
+    const char* port_arg = nullptr;
+
+    int i = 1;
+    while (i < argc) {
+        if (std::strcmp(argv[i], "--client-ca") == 0 && i + 1 < argc) {
+            client_ca_path = argv[++i];
+            ++i;
+        } else if (std::strcmp(argv[i], "--require-client-cert") == 0) {
+            require_client_cert = true;
+            ++i;
+        } else if (!cert_path) {
+            cert_path = argv[i++];
+        } else if (!key_path) {
+            key_path = argv[i++];
+        } else if (!bind_addr_arg) {
+            bind_addr_arg = argv[i++];
+        } else if (!port_arg) {
+            port_arg = argv[i++];
+        } else {
+            ++i;
+        }
+    }
+
+    if (!cert_path || !key_path) {
+        std::fprintf(stderr,
+            "Usage: %s [--client-ca <ca.pem>] [--require-client-cert] "
+            "<cert.pem> <key.pem> [bind_addr] [port]\n", argv[0]);
         return 1;
     }
 
-    const char* cert_path = argv[1];
-    const char* key_path = argv[2];
-    std::string bind_addr = (argc >= 4) ? argv[3] : "";
-    uint16_t port = (argc >= 5) ? static_cast<uint16_t>(std::atoi(argv[4])) : 4433;
+    std::string bind_addr = bind_addr_arg ? bind_addr_arg : "";
+    uint16_t port = port_arg ? static_cast<uint16_t>(std::atoi(port_arg)) : 4433;
 
     // Load certificate chain
     std::printf("Loading certificates from %s...\n", cert_path);
@@ -64,6 +103,19 @@ int main(int argc, char* argv[]) {
     auto loaded = tls::load_ec_private_key(key_pem);
     std::printf("Key curve: %s\n",
         loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" : "P-384");
+
+    // Load client CA trust store (if mTLS)
+    asn1::x509::trust_store client_ca_store;
+    if (client_ca_path) {
+        std::printf("Loading client CA from %s...\n", client_ca_path);
+        auto ca_pem = read_file(client_ca_path);
+        auto ca_blocks = asn1::pem::decode_all(ca_pem);
+        for (auto& block : ca_blocks) {
+            if (block.label == "CERTIFICATE")
+                client_ca_store.add(std::move(block.der));
+        }
+        std::printf("Loaded %zu client CA cert(s)\n", client_ca_store.roots.size());
+    }
 
     // Start listening
     std::printf("Listening on %s:%u...\n",
@@ -91,6 +143,10 @@ int main(int argc, char* argv[]) {
         cfg.certificate_chain = cert_chain;
         cfg.private_key = loaded.key;
         cfg.private_key_curve = loaded.curve;
+        if (client_ca_path) {
+            cfg.client_ca = &client_ca_store;
+            cfg.require_client_cert = require_client_cert;
+        }
 
         tls::tls_server server(conn, rng, cfg);
         auto result = server.handshake();
@@ -99,8 +155,9 @@ int main(int argc, char* argv[]) {
                 static_cast<int>(result.error));
             continue;
         }
-        std::printf("TLS handshake complete! Suite: 0x%04X\n",
-            static_cast<unsigned>(server.negotiated_suite()));
+        std::printf("TLS handshake complete! Suite: 0x%04X, client_authenticated: %s\n",
+            static_cast<unsigned>(server.negotiated_suite()),
+            server.client_authenticated() ? "yes" : "no");
 
         // Read client request (discard it)
         std::array<uint8_t, 4096> buf{};
@@ -109,16 +166,22 @@ int main(int argc, char* argv[]) {
             std::printf("Received %zu bytes from client\n", recv_result.value);
         }
 
-        // Send response
-        const char* response =
+        // Choose response based on authentication status
+        const char* body = server.client_authenticated()
+            ? "Hello, secure!\n" : (client_ca_path ? "Hello, insecure!\n" : "Hello, world!\n");
+        size_t body_len = std::strlen(body);
+
+        char response[256];
+        int response_len = std::snprintf(response, sizeof(response),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/plain\r\n"
-            "Content-Length: 14\r\n"
+            "Content-Length: %zu\r\n"
             "Connection: close\r\n"
             "\r\n"
-            "Hello, world!\n";
+            "%s", body_len, body);
+
         auto send_result = server.send(std::span<const uint8_t>(
-            reinterpret_cast<const uint8_t*>(response), std::strlen(response)));
+            reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(response_len)));
         if (!send_result.ok()) {
             std::fprintf(stderr, "Send failed\n");
         }

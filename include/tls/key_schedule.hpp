@@ -40,6 +40,22 @@ constexpr std::array<uint8_t, 48> derive_master_secret(
         std::span<const uint8_t>(seed));
 }
 
+// RFC 7627: Extended Master Secret
+// master_secret = PRF(pre_master_secret, "extended master secret",
+//                     session_hash)[0..47]
+// where session_hash = Hash(handshake_messages up to ClientKeyExchange)
+template <hash_function THash>
+constexpr std::array<uint8_t, 48> derive_extended_master_secret(
+    std::span<const uint8_t> pre_master_secret,
+    std::span<const uint8_t> session_hash)
+{
+    constexpr uint8_t label[] = "extended master secret";
+    return tls_prf<THash, 48>(
+        pre_master_secret,
+        std::span<const uint8_t>(label, 22),
+        session_hash);
+}
+
 // Expanded key material from the key block
 struct KeyBlock {
     std::array<uint8_t, 32> client_write_key{}; // up to AES-256 (32 bytes)

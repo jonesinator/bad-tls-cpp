@@ -255,11 +255,11 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 ### TLS Client (`tls/client.hpp`)
 
-`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, and an optional `hostname` for SAN/CN verification. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
+`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, an optional `hostname` for SAN/CN verification, and optional client certificate + private key for mutual TLS (mTLS). When the server requests client authentication, the client sends its certificate chain and a CertificateVerify message signed with its EC private key. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
 
 ### TLS Server (`tls/server.hpp`)
 
-`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), EC private key, and ECDSA cipher suites to offer. The server generates an ephemeral ECDHE keypair, signs the ServerKeyExchange with its long-term ECDSA key (using RFC 6979 deterministic nonces), and completes the full handshake including ChangeCipherSpec and Finished exchange. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`. Currently supports ECDSA cipher suites only (P-256 and P-384).
+`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), EC private key, ECDSA cipher suites to offer, and optional mTLS settings (`client_ca` trust store and `require_client_cert` flag). When `client_ca` is set, the server sends a CertificateRequest, verifies the client's certificate chain, and validates the CertificateVerify signature. `client_authenticated()` reports whether the client presented a valid certificate. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`. Currently supports ECDSA cipher suites only (P-256 and P-384).
 
 ### Private Key Loading (`tls/private_key.hpp`)
 
@@ -312,7 +312,7 @@ The test suite is comprehensive:
 | `tls_server_tool.cpp` | End-to-end TLS server: loads EC key + cert, listens, serves "Hello, world!" |
 | `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites |
 | `test_tls_server.sh` | Server integration test: generates PKI, tests with curl and tls_connect_tool |
-| `test_tls_openssl_server.sh` | Third-party server test: our client connects to openssl s_server |
+| `test_tls_openssl_server.sh` | Third-party server test: our client connects to openssl s_server (TLS + mTLS) |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |

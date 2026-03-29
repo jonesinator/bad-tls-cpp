@@ -1,18 +1,21 @@
 /**
  * TLS 1.2 end-to-end connection tool.
  *
- * Usage: ./tls_connect_tool [--cafile <ca.pem>] <hostname> [port]
+ * Usage: ./tls_connect_tool [options] <hostname> [port]
+ *
+ * Options:
+ *   --cafile <ca.pem>    Use custom CA certificate file instead of Mozilla roots
+ *   --cert <cert.pem>    Client certificate for mTLS
+ *   --key <key.pem>      Client private key for mTLS
  *
  * Connects to a server, performs a TLS 1.2 handshake with certificate
  * and hostname verification, sends an HTTP/1.1 GET request, and prints
  * the response.
- *
- * By default uses the Mozilla CA bundle. Use --cafile to specify a
- * custom CA certificate file (e.g. for self-signed servers).
  */
 
 #include <tls/tcp_transport.hpp>
 #include <tls/client.hpp>
+#include <tls/private_key.hpp>
 #include <x509/mozilla_roots.hpp>
 #include <crypto/random.hpp>
 #include <cstdio>
@@ -21,8 +24,12 @@
 #include <string>
 
 int main(int argc, char* argv[]) {
+    std::setbuf(stdout, nullptr);
+
     // Parse arguments
     const char* cafile = nullptr;
+    const char* certfile = nullptr;
+    const char* keyfile = nullptr;
     const char* hostname_arg = nullptr;
     const char* port_arg = nullptr;
 
@@ -30,6 +37,12 @@ int main(int argc, char* argv[]) {
     while (i < argc) {
         if (std::strcmp(argv[i], "--cafile") == 0 && i + 1 < argc) {
             cafile = argv[++i];
+            ++i;
+        } else if (std::strcmp(argv[i], "--cert") == 0 && i + 1 < argc) {
+            certfile = argv[++i];
+            ++i;
+        } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+            keyfile = argv[++i];
             ++i;
         } else if (!hostname_arg) {
             hostname_arg = argv[i++];
@@ -41,7 +54,9 @@ int main(int argc, char* argv[]) {
     }
 
     if (!hostname_arg) {
-        std::fprintf(stderr, "Usage: %s [--cafile <ca.pem>] <hostname> [port]\n", argv[0]);
+        std::fprintf(stderr,
+            "Usage: %s [--cafile <ca.pem>] [--cert <cert.pem>] [--key <key.pem>] "
+            "<hostname> [port]\n", argv[0]);
         return 1;
     }
 
@@ -70,6 +85,34 @@ int main(int argc, char* argv[]) {
         std::printf("Loaded %zu roots\n", roots.roots.size());
     }
 
+    // Load client certificate and key (mTLS)
+    std::vector<std::vector<uint8_t>> client_cert_chain;
+    tls::loaded_key client_loaded{{asn1::x509::p256_curve::number_type{}}, tls::NamedCurve::secp256r1};
+    if (certfile && keyfile) {
+        std::printf("Loading client certificate from %s...\n", certfile);
+        std::ifstream cf(certfile);
+        if (!cf) {
+            std::fprintf(stderr, "Cannot open %s\n", certfile);
+            return 1;
+        }
+        std::string cert_pem{std::istreambuf_iterator<char>(cf), {}};
+        auto cert_blocks = asn1::pem::decode_all(cert_pem);
+        for (auto& block : cert_blocks) {
+            if (block.label == "CERTIFICATE")
+                client_cert_chain.push_back(std::move(block.der));
+        }
+        std::printf("Loaded %zu client cert(s)\n", client_cert_chain.size());
+
+        std::printf("Loading client key from %s...\n", keyfile);
+        std::ifstream kf(keyfile);
+        if (!kf) {
+            std::fprintf(stderr, "Cannot open %s\n", keyfile);
+            return 1;
+        }
+        std::string key_pem{std::istreambuf_iterator<char>(kf), {}};
+        client_loaded = tls::load_ec_private_key(key_pem);
+    }
+
     std::printf("Connecting to %s:%u...\n", hostname.c_str(), port);
     tls::tcp_transport conn(hostname, port);
     if (!conn.is_connected()) {
@@ -82,6 +125,11 @@ int main(int argc, char* argv[]) {
     tls::client_config cfg;
     cfg.trust = &roots;
     cfg.hostname = hostname;
+    if (!client_cert_chain.empty()) {
+        cfg.client_certificate_chain = client_cert_chain;
+        cfg.client_private_key = client_loaded.key;
+        cfg.client_key_curve = client_loaded.curve;
+    }
 
     tls::tls_client client(conn, rng, cfg);
     std::printf("Starting TLS handshake...\n");

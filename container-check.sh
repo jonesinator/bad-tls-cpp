@@ -10,4 +10,4 @@ set -euo pipefail
 CMD="${CONTAINER_CMD:-podman}"
 
 echo "Using: $CMD"
-exec "$CMD" build --no-cache -f Containerfile -t asn1-check .
+exec "$CMD" build -f Containerfile --target check -t asn1-check .

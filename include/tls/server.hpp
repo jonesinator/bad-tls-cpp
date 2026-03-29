@@ -15,6 +15,7 @@
 #include <crypto/ecdsa.hpp>
 #include <crypto/random.hpp>
 #include <asn1/der/codegen.hpp>
+#include <x509/trust_store.hpp>
 #include <span>
 #include <vector>
 
@@ -38,6 +39,10 @@ struct server_config {
     // Supported curves for ECDHE
     std::array<NamedCurve, 2> curves = {NamedCurve::secp256r1, NamedCurve::secp384r1};
     size_t num_curves = 2;
+
+    // Client certificate verification (mTLS)
+    const asn1::x509::trust_store* client_ca = nullptr;  // non-null enables CertificateRequest
+    bool require_client_cert = false;                     // reject clients without certs
 };
 
 template <transport Transport, random_generator RNG>
@@ -51,6 +56,7 @@ class tls_server {
     CipherSuite negotiated_suite_{};
     std::array<uint8_t, 48> master_secret_{};
     bool handshake_complete_ = false;
+    bool client_authenticated_ = false;
 
 public:
     tls_server(Transport& t, RNG& rng, const server_config& cfg)
@@ -133,6 +139,7 @@ public:
     }
 
     bool is_connected() const { return handshake_complete_; }
+    bool client_authenticated() const { return client_authenticated_; }
     CipherSuite negotiated_suite() const { return negotiated_suite_; }
 
 private:
@@ -355,6 +362,25 @@ private:
         auto ske_err = rio_.send_record(ContentType::handshake, ske_w.data());
         if (!ske_err) return {ske_err.error};
 
+        // --- Send CertificateRequest (if mTLS enabled) ---
+        bool cert_requested = false;
+        if (config_.client_ca) {
+            cert_requested = true;
+            CertificateRequest cr{};
+            // ecdsa_sign(1) certificate type
+            cr.certificate_types.push_back(64); // ecdsa_sign
+            cr.supported_signature_algorithms.push_back(
+                {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa});
+            cr.supported_signature_algorithms.push_back(
+                {HashAlgorithm::sha384, SignatureAlgorithm::ecdsa});
+
+            TlsWriter<4096> cr_w;
+            write_certificate_request(cr_w, cr);
+            transcript.update(cr_w.data());
+            auto cr_err = rio_.send_record(ContentType::handshake, cr_w.data());
+            if (!cr_err) return {cr_err.error};
+        }
+
         // --- Send ServerHelloDone ---
         TlsWriter<64> shd_w;
         write_server_hello_done(shd_w);
@@ -362,9 +388,51 @@ private:
         auto shd_err = rio_.send_record(ContentType::handshake, shd_w.data());
         if (!shd_err) return {shd_err.error};
 
-        // --- Receive ClientKeyExchange ---
+        // --- Receive client messages ---
         handshake_reader<Transport> hs_reader(rio_);
 
+        // If CertificateRequest was sent, expect client Certificate first
+        asn1::x509::x509_public_key client_pub_key{};
+        bool client_sent_cert = false;
+        if (cert_requested) {
+            auto ccert_msg_res = hs_reader.next_message(transcript);
+            if (!ccert_msg_res) return {ccert_msg_res.error};
+            TlsReader ccert_hdr_r(ccert_msg_res.value);
+            auto ccert_hdr = read_handshake_header(ccert_hdr_r);
+            if (ccert_hdr.type != HandshakeType::certificate)
+                return {tls_error::unexpected_message};
+
+            TlsReader ccert_r(ccert_msg_res.value);
+            ccert_r.read_u8(); ccert_r.read_u24(); // skip handshake header
+            auto ccert_msg = read_certificate(ccert_r);
+
+            if (ccert_msg.certificate_list.size() > 0) {
+                client_sent_cert = true;
+
+                // Verify client certificate chain
+                std::vector<std::vector<uint8_t>> chain_der_vec;
+                for (size_t ci = 0; ci < ccert_msg.certificate_list.size(); ++ci) {
+                    auto& c = ccert_msg.certificate_list[ci];
+                    chain_der_vec.emplace_back(c.data.data(), c.data.data() + c.len);
+                }
+                try {
+                    if (!asn1::x509::verify_chain(chain_der_vec, *config_.client_ca))
+                        return {tls_error::bad_certificate};
+                } catch (...) {
+                    return {tls_error::bad_certificate};
+                }
+
+                // Extract client public key for CertificateVerify validation
+                auto& leaf_der = ccert_msg.certificate_list[0];
+                auto leaf_cert = asn1::x509::parse_certificate(
+                    std::span<const uint8_t>(leaf_der.data.data(), leaf_der.len));
+                client_pub_key = asn1::x509::extract_public_key(leaf_cert);
+            } else if (config_.require_client_cert) {
+                return {tls_error::bad_certificate};
+            }
+        }
+
+        // --- Receive ClientKeyExchange ---
         auto cke_msg_res = hs_reader.next_message(transcript);
         if (!cke_msg_res) return {cke_msg_res.error};
         TlsReader cke_r(cke_msg_res.value);
@@ -389,6 +457,48 @@ private:
                 *priv, std::span<const uint8_t>(cke.public_key.data.data(), cke.public_key.len));
             if (!pms_res) return {pms_res.error};
             pms = pms_res.value;
+        }
+
+        // --- Receive CertificateVerify (if client sent a cert) ---
+        if (client_sent_cert) {
+            // Get transcript hash BEFORE CertificateVerify
+            auto pre_cv_hash = transcript.current_hash();
+
+            // Read CertificateVerify and add to transcript
+            auto cv_msg_res = hs_reader.next_message(transcript);
+            if (!cv_msg_res) return {cv_msg_res.error};
+            TlsReader cv_hdr_r(cv_msg_res.value);
+            auto cv_hdr = read_handshake_header(cv_hdr_r);
+            if (cv_hdr.type != HandshakeType::certificate_verify)
+                return {tls_error::unexpected_message};
+
+            // Parse CertificateVerify body
+            TlsReader cv_r(cv_msg_res.value);
+            cv_r.read_u8(); cv_r.read_u24(); // skip handshake header
+            SignatureAndHashAlgorithm cv_alg;
+            cv_alg.hash = static_cast<HashAlgorithm>(cv_r.read_u8());
+            cv_alg.signature = static_cast<SignatureAlgorithm>(cv_r.read_u8());
+            uint16_t sig_len = cv_r.read_u16();
+            auto sig_data = cv_r.read_bytes(sig_len);
+
+            // Verify ECDSA signature over pre-CertificateVerify transcript hash
+            if (cv_alg.signature != SignatureAlgorithm::ecdsa)
+                return {tls_error::handshake_failure};
+
+            auto cv_sig_bytes = std::span<const uint8_t>(sig_data.data(), sig_len);
+            bool sig_ok = false;
+            if (auto* key = std::get_if<point<asn1::x509::p256_curve>>(&client_pub_key)) {
+                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p256_curve>(cv_sig_bytes);
+                sig_ok = ecdsa_verify<asn1::x509::p256_curve, Hash>(*key, pre_cv_hash, sig);
+            } else if (auto* key = std::get_if<point<asn1::x509::p384_curve>>(&client_pub_key)) {
+                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p384_curve>(cv_sig_bytes);
+                sig_ok = ecdsa_verify<asn1::x509::p384_curve, Hash>(*key, pre_cv_hash, sig);
+            }
+
+            if (!sig_ok)
+                return {tls_error::signature_verification_failed};
+
+            client_authenticated_ = true;
         }
 
         // --- Key derivation ---

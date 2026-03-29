@@ -75,6 +75,13 @@ struct ServerKeyExchangeEcdhe {
 
 struct ServerHelloDone {};
 
+// RFC 5246 Section 7.4.4 — CertificateRequest
+struct CertificateRequest {
+    asn1::FixedVector<uint8_t, 16> certificate_types;
+    asn1::FixedVector<SignatureAndHashAlgorithm, 32> supported_signature_algorithms;
+    asn1::FixedVector<asn1::FixedVector<uint8_t, 512>, 8> certificate_authorities; // DER-encoded CA DNs
+};
+
 // RFC 4492 Section 5.7
 struct ClientKeyExchangeEcdhe {
     asn1::FixedVector<uint8_t, 133> public_key;
@@ -151,6 +158,21 @@ constexpr void write_client_hello_extensions(
             w.write_u8(static_cast<uint8_t>(sig_algs[i].hash));
             w.write_u8(static_cast<uint8_t>(sig_algs[i].signature));
         }
+    }
+
+    // renegotiation_info (type 0xFF01) — RFC 5746
+    // Required by OpenSSL 3.x to avoid "unsafe legacy renegotiation" error.
+    {
+        w.write_u16(static_cast<uint16_t>(ExtensionType::renegotiation_info));
+        w.write_u16(1); // extension data length
+        w.write_u8(0);  // empty renegotiated_connection
+    }
+
+    // extended_master_secret (type 0x0017) — RFC 7627
+    // Required by OpenSSL 3.x when client certificates are used.
+    {
+        w.write_u16(static_cast<uint16_t>(ExtensionType::extended_master_secret));
+        w.write_u16(0); // empty extension data
     }
 
     // Patch total extensions length
@@ -473,6 +495,77 @@ template <size_t Cap>
 constexpr void write_server_hello_done(TlsWriter<Cap>& w) {
     w.write_u8(static_cast<uint8_t>(HandshakeType::server_hello_done));
     w.write_u24(0); // empty body
+}
+
+// --- Serialization: CertificateRequest ---
+
+template <size_t Cap>
+constexpr void write_certificate_request(TlsWriter<Cap>& w, const CertificateRequest& msg) {
+    size_t hdr_pos = w.position();
+    w.write_u8(static_cast<uint8_t>(HandshakeType::certificate_request));
+    w.write_u24(0); // placeholder
+
+    size_t body_start = w.position();
+
+    // certificate_types
+    w.write_u8(static_cast<uint8_t>(msg.certificate_types.size()));
+    for (size_t i = 0; i < msg.certificate_types.size(); ++i)
+        w.write_u8(msg.certificate_types[i]);
+
+    // supported_signature_algorithms
+    w.write_u16(static_cast<uint16_t>(msg.supported_signature_algorithms.size() * 2));
+    for (size_t i = 0; i < msg.supported_signature_algorithms.size(); ++i) {
+        w.write_u8(static_cast<uint8_t>(msg.supported_signature_algorithms[i].hash));
+        w.write_u8(static_cast<uint8_t>(msg.supported_signature_algorithms[i].signature));
+    }
+
+    // certificate_authorities (list of DER-encoded distinguished names)
+    size_t ca_len_pos = w.position();
+    w.write_u16(0); // placeholder
+    size_t ca_start = w.position();
+    for (size_t i = 0; i < msg.certificate_authorities.size(); ++i) {
+        auto& dn = msg.certificate_authorities[i];
+        w.write_u16(static_cast<uint16_t>(dn.size()));
+        w.write_bytes(std::span<const uint8_t>(dn.data.data(), dn.len));
+    }
+    w.patch_u16(ca_len_pos, static_cast<uint16_t>(w.position() - ca_start));
+
+    uint32_t body_len = static_cast<uint32_t>(w.position() - body_start);
+    w.patch_u24(hdr_pos + 1, body_len);
+}
+
+// --- Deserialization: CertificateRequest ---
+
+constexpr CertificateRequest read_certificate_request(TlsReader& r) {
+    CertificateRequest msg;
+
+    uint8_t types_len = r.read_u8();
+    for (size_t i = 0; i < types_len; ++i)
+        msg.certificate_types.push_back(r.read_u8());
+
+    uint16_t sig_algs_len = r.read_u16();
+    size_t num_sig_algs = sig_algs_len / 2;
+    for (size_t i = 0; i < num_sig_algs; ++i) {
+        SignatureAndHashAlgorithm sa;
+        sa.hash = static_cast<HashAlgorithm>(r.read_u8());
+        sa.signature = static_cast<SignatureAlgorithm>(r.read_u8());
+        msg.supported_signature_algorithms.push_back(sa);
+    }
+
+    if (!r.at_end()) {
+        uint16_t ca_len = r.read_u16();
+        auto ca_reader = r.sub_reader(ca_len);
+        while (!ca_reader.at_end()) {
+            uint16_t dn_len = ca_reader.read_u16();
+            auto dn_data = ca_reader.read_bytes(dn_len);
+            asn1::FixedVector<uint8_t, 512> dn;
+            for (size_t i = 0; i < dn_len; ++i)
+                dn.push_back(dn_data[i]);
+            msg.certificate_authorities.push_back(dn);
+        }
+    }
+
+    return msg;
 }
 
 // --- Change Cipher Spec ---
