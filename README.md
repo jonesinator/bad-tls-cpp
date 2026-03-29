@@ -44,14 +44,17 @@ asn1/
 │   ├── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
 │   │   ├── verify.hpp           # Chain verification, key extraction, sig verify
 │   │   └── trust_store.hpp      # Trusted root certificate store
-│   └── tls/                     # TLS 1.2 data layer (depends on crypto/)
+│   └── tls/                     # TLS 1.2 client (depends on crypto/ + x509/)
 │       ├── types.hpp            # Wire enums, ProtocolVersion, CipherSuite, etc.
 │       ├── record.hpp           # TlsReader/TlsWriter, record framing
 │       ├── handshake.hpp        # Handshake message structs + serialization
 │       ├── cipher_suite.hpp     # Cipher suite parameters and type-level traits
 │       ├── key_schedule.hpp     # Master secret, key expansion, verify_data
 │       ├── record_protection.hpp # AES-GCM record encrypt/decrypt (RFC 5288)
-│       └── transcript.hpp       # Handshake transcript hash accumulator
+│       ├── transcript.hpp       # Handshake transcript hash accumulator
+│       ├── transport.hpp        # Transport concept + memory_transport mock
+│       ├── connection.hpp       # Record I/O, SKE verification, ECDH helpers
+│       └── client.hpp           # tls_client handshake state machine
 └── tests/                       # Comprehensive test suite
 ```
 
@@ -193,7 +196,7 @@ Helper functions: `random_bytes<N>(rng)` fills an `std::array`, `random_scalar<T
 
 ## The TLS 1.2 Layer (`tls/`)
 
-The TLS module implements the data layer for TLS 1.2 (RFC 5246): types, binary serialization, key derivation, and record-level encryption. It uses its own big-endian binary framing, not ASN.1 DER.
+The TLS module implements a TLS 1.2 client (RFC 5246): types, binary serialization, key derivation, record-level encryption, transport abstraction, buffered record I/O, ECDHE key exchange, ServerKeyExchange signature verification, and a complete handshake state machine with application data send/receive. It uses its own big-endian binary framing, not ASN.1 DER.
 
 ### Wire Types (`tls/types.hpp`)
 
@@ -229,6 +232,18 @@ AES-GCM record encryption and decryption per RFC 5288. `build_nonce()` construct
 
 A thin wrapper around any `hash_function` for accumulating handshake messages. `TranscriptHash<THash>` supports `update()`, non-destructive `current_hash()` (finalizes a copy), and `finalize()`.
 
+### Transport (`tls/transport.hpp`)
+
+Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `write(span)` → `size_t`). Provides `memory_transport` — a constexpr-capable mock with pre-loaded rx/tx buffers for testing.
+
+### Connection Infrastructure (`tls/connection.hpp`)
+
+`tls_error` enum and `tls_result<T>` for error propagation. `record_io<Transport>` provides buffered record-layer I/O over any transport, with encryption state management and runtime cipher suite dispatch via `dispatch_cipher_suite`. `handshake_reader` handles message framing within handshake records (coalescing and fragmentation). `verify_server_key_exchange()` verifies the ServerKeyExchange signature (ECDSA or RSA) against the server's certificate public key. `compute_ecdh_exchange()` performs the full ECDHE key exchange: parse server point, validate, generate ephemeral keypair, compute shared secret, serialize client public key.
+
+### TLS Client (`tls/client.hpp`)
+
+`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, and an optional `trust_store` for certificate chain verification. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
+
 ## ASN.1 Definitions
 
 The `definitions/` directory contains ASN.1 schemas that get `#embed`-ed and parsed at compile time:
@@ -263,6 +278,7 @@ The test suite is comprehensive:
 | `test_tls_handshake.cpp` | ClientHello serialization, ServerHello/Certificate/SKE parsing, Finished roundtrip |
 | `test_tls_key_schedule.cpp` | Master secret derivation, key block expansion, verify_data, transcript hash |
 | `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
+| `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |

@@ -21,7 +21,7 @@ Five modules with a strict dependency DAG (`number` ← `asn1`, `crypto` ← `x5
 - **`include/number/`** — Fixed-width big integer arithmetic (`number<TDigit, NDigits>`). Standalone, no dependencies on other modules.
 - **`include/crypto/`** — Cryptographic algorithms built on `number/`. ECC (field elements, curve points, ECDSA, ECDH), hashing (SHA-2, HMAC, HKDF, TLS PRF), symmetric encryption (AES, GCM), RSA-PSS signatures, and random number generation (`random_generator` concept with `system_random` CSPRNG and `xoshiro256ss` constexpr PRNG).
 - **`include/x509/`** — X.509 certificate chain verification. Depends on both `asn1/` (parsing) and `crypto/` (signature verification). Provides a modular `certificate_verifier` concept for custom policies.
-- **`include/tls/`** — TLS 1.2 data layer. Record framing, handshake message types, cipher suite definitions, key schedule (master secret, key expansion), AES-GCM record protection, and transcript hashing. Depends on `crypto/`. Uses its own binary framing (big-endian, not ASN.1 DER). Supports four ECDHE+AES-GCM cipher suites.
+- **`include/tls/`** — TLS 1.2 client implementation. Transport abstraction (`transport` concept), record framing, handshake message types, cipher suite definitions, key schedule, AES-GCM record protection, transcript hashing, buffered record I/O with encryption state, ServerKeyExchange signature verification, ECDH integration, and the `tls_client<Transport, RNG>` handshake state machine with application data send/receive. Depends on `crypto/` and `x509/`. Supports four ECDHE+AES-GCM cipher suites.
 
 The `number/` headers are also available at `/home/aaron/projects/number` as a separate working directory.
 

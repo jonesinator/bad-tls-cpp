@@ -40,6 +40,7 @@ add_asn1_test(test_tls_record)
 add_asn1_test(test_tls_handshake)
 add_asn1_test(test_tls_key_schedule)
 add_asn1_test(test_tls_record_protection)
+add_asn1_test(test_tls_client)
 
 add_executable(x509_tool tests/x509_tool.cpp)
 target_link_libraries(x509_tool PRIVATE asn1)
