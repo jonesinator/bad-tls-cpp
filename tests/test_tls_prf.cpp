@@ -1,5 +1,5 @@
-#include <number/tls_prf.hpp>
-#include <number/sha2.hpp>
+#include <crypto/tls_prf.hpp>
+#include <crypto/sha2.hpp>
 #include <cassert>
 #include <cstdint>
 #include <array>

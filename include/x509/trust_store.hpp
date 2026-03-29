@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <asn1/x509/verify.hpp>
+#include <x509/verify.hpp>
 #include <optional>
 #include <vector>
 

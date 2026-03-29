@@ -10,9 +10,9 @@
  *   ecdsa_tool derive <pem_key_file> <peer_pub_pem> <output_secret_bin>
  */
 
-#include <number/ecdh.hpp>
-#include <number/ecdsa.hpp>
-#include <number/sha2.hpp>
+#include <crypto/ecdh.hpp>
+#include <crypto/ecdsa.hpp>
+#include <crypto/sha2.hpp>
 #include <asn1/pem.hpp>
 #include <asn1/parser.hpp>
 #include <asn1/der/codegen.hpp>

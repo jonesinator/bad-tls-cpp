@@ -15,8 +15,8 @@
  * Salt length = SHA-256 digest size = 32 bytes.
  */
 
-#include <number/rsa.hpp>
-#include <number/sha2.hpp>
+#include <crypto/rsa.hpp>
+#include <crypto/sha2.hpp>
 #include <asn1/pem.hpp>
 #include <asn1/der/reader.hpp>
 #include <asn1/der/types.hpp>

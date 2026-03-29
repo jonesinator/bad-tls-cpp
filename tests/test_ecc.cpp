@@ -1,4 +1,4 @@
-#include <number/ecc.hpp>
+#include <crypto/ecc.hpp>
 #include <asn1/pem.hpp>
 #include <asn1/parser.hpp>
 #include <cassert>

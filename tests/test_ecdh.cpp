@@ -1,5 +1,5 @@
-#include <number/ecdh.hpp>
-#include <number/sha2.hpp>
+#include <crypto/ecdh.hpp>
+#include <crypto/sha2.hpp>
 #include <asn1/pem.hpp>
 #include <asn1/parser.hpp>
 #include <asn1/der/codegen.hpp>

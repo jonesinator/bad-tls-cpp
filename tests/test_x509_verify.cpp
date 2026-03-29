@@ -1,4 +1,4 @@
-#include <asn1/x509/trust_store.hpp>
+#include <x509/trust_store.hpp>
 #include <cassert>
 #include <cstdint>
 #include <string_view>

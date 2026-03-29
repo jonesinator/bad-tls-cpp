@@ -1,4 +1,4 @@
-#include <number/gcm.hpp>
+#include <crypto/gcm.hpp>
 #include <cassert>
 #include <cstdint>
 #include <array>

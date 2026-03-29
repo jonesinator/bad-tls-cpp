@@ -15,7 +15,7 @@
 #ifndef ECC_HPP_
 #define ECC_HPP_
 
-#include "number.hpp"
+#include <number/number.hpp>
 
 /**
  * An element of the prime field F_p, where p is determined by the curve type TCurve.

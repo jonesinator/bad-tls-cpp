@@ -8,9 +8,10 @@ A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, a
 asn1/
 ├── CMakeLists.txt
 ├── definitions/
-│   └── ecprivatekey.asn1        # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
+│   ├── ecprivatekey.asn1        # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
+│   └── x509.asn1               # ASN.1 schema for X.509 certificates (RFC 5280)
 ├── include/
-│   ├── asn1/                    # ASN.1 + DER layer
+│   ├── asn1/                    # Pure ASN.1 parsing + DER encoding (no crypto dependency)
 │   │   ├── ast.hpp              # Abstract Syntax Tree nodes
 │   │   ├── lexer.hpp            # Constexpr tokenizer
 │   │   ├── parser.hpp           # Recursive descent parser
@@ -24,27 +25,36 @@ asn1/
 │   │       ├── reader.hpp       # DER binary decoder
 │   │       ├── writer.hpp       # DER binary encoder
 │   │       └── codegen.hpp      # C++ type generation from ASN.1
-│   └── number/                  # Cryptographic math layer
-│       ├── number.hpp           # Fixed-width big integers
-│       ├── ecc.hpp              # Elliptic curve field/point arithmetic
-│       ├── ecdsa.hpp            # ECDSA signing/verification (RFC 6979)
-│       ├── ecdh.hpp             # ECDH key agreement
-│       ├── sha2.hpp             # SHA-2 family (FIPS 180-4)
-│       ├── hmac.hpp             # HMAC (RFC 2104)
-│       ├── hkdf.hpp             # HKDF (RFC 5869)
-│       ├── aes.hpp              # AES block cipher (FIPS 197)
-│       ├── gcm.hpp              # GCM authenticated encryption (SP 800-38D)
-│       ├── tls_prf.hpp          # TLS 1.2 PRF (RFC 5246)
-│       ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
-│       ├── hash_concept.hpp     # Hash function concept
-│       └── block_cipher_concept.hpp  # Block cipher concept
-├── definitions/
-│   ├── ecprivatekey.asn1        # ASN.1 schema for ECC keys (RFC 5915/5958/5280)
-│   └── x509.asn1               # ASN.1 schema for X.509 certificates (RFC 5280)
-├── include/asn1/x509/           # X.509 certificate verification
-│   ├── verify.hpp               # Chain verification, key extraction, sig verify
-│   └── trust_store.hpp          # Trusted root certificate store
+│   ├── number/                  # Fixed-width big integer arithmetic (standalone)
+│   │   └── number.hpp           # number<TDigit, NDigits> with full arithmetic
+│   ├── crypto/                  # Cryptographic algorithms (depends on number/)
+│   │   ├── ecc.hpp              # Elliptic curve field/point arithmetic
+│   │   ├── ecdsa.hpp            # ECDSA signing/verification (RFC 6979)
+│   │   ├── ecdh.hpp             # ECDH key agreement
+│   │   ├── sha2.hpp             # SHA-2 family (FIPS 180-4)
+│   │   ├── hmac.hpp             # HMAC (RFC 2104)
+│   │   ├── hkdf.hpp             # HKDF (RFC 5869)
+│   │   ├── aes.hpp              # AES block cipher (FIPS 197)
+│   │   ├── gcm.hpp              # GCM authenticated encryption (SP 800-38D)
+│   │   ├── tls_prf.hpp          # TLS 1.2 PRF (RFC 5246)
+│   │   ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
+│   │   ├── hash_concept.hpp     # Hash function concept
+│   │   └── block_cipher_concept.hpp  # Block cipher concept
+│   └── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
+│       ├── verify.hpp           # Chain verification, key extraction, sig verify
+│       └── trust_store.hpp      # Trusted root certificate store
 └── tests/                       # Comprehensive test suite
+```
+
+The four modules form a strict dependency DAG:
+
+```
+number (standalone)
+  ↑        ↑
+  │        │
+asn1    crypto
+  ↑        ↑
+  └──x509──┘
 ```
 
 ## The ASN.1 Layer
@@ -109,19 +119,19 @@ Wraps DER binary in PEM text format (`-----BEGIN/END LABEL-----` with Base64 bod
 
 Complete RFC 4648 codec supporting Base16, Base32, Base32hex, Base64, and Base64url — all fully constexpr with compile-time lookup table generation.
 
-## The Cryptographic Layer
-
-### Big Integers (`number/number.hpp`)
+## Big Integers (`number/number.hpp`)
 
 `number<TDigit, NDigits, NDigitMax>` is a fixed-width unsigned integer stored as an array of digits (e.g., `number<uint32_t, 16>` for 512-bit numbers). Supports full arithmetic (+, -, *, /), comparison, bit operations, modular arithmetic, and byte conversion. No dynamic allocation, fully constexpr.
 
-### Elliptic Curve Arithmetic (`ecc.hpp`)
+## The Cryptographic Layer (`crypto/`)
+
+### Elliptic Curve Arithmetic (`crypto/ecc.hpp`)
 
 - **`field_element<TCurve>`**: A number that automatically reduces modulo the curve's prime `p` on every operation. Parameterized on a curve type that provides constants (p, a, b, Gx, Gy, n).
 - **`point<TCurve>`**: An affine point on the curve with addition, doubling, scalar multiplication (double-and-add), infinity representation, on-curve validation, and serialization (uncompressed format: `0x04 || x || y`).
 - Supported curves: **P-256** (NIST), **P-384** (NIST), and **secp256k1** (Bitcoin).
 
-### ECDSA (`ecdsa.hpp`)
+### ECDSA (`crypto/ecdsa.hpp`)
 
 Full ECDSA implementation:
 - `ecdsa_sign()`: Sign a message hash with a private key
@@ -130,7 +140,7 @@ Full ECDSA implementation:
 - Low-S normalization for OpenSSL compatibility
 - `ecdsa_signature<TCurve>` holds the (r, s) pair
 
-### ECDH (`ecdh.hpp`)
+### ECDH (`crypto/ecdh.hpp`)
 
 Full ECDH key agreement:
 - `ecdh_keypair_from_private()`: Derive public key as d*G
@@ -138,29 +148,29 @@ Full ECDH key agreement:
 - `ecdh_raw_shared_secret()`: Compute shared x-coordinate
 - `ecdh_derive()`: Raw shared secret + HKDF for key material derivation
 
-### SHA-2 (`sha2.hpp`)
+### SHA-2 (`crypto/sha2.hpp`)
 
 Complete FIPS 180-4 implementation as a template `sha2_state<FullBits, TruncBits>` supporting SHA-256, SHA-224, SHA-512, SHA-384, SHA-512/224, and SHA-512/256. Streaming interface: `init()` → `update()` → `finalize()`. Constexpr, including the K-constant generation via fractional cube roots.
 
-### HMAC (`hmac.hpp`) and HKDF (`hkdf.hpp`)
+### HMAC (`crypto/hmac.hpp`) and HKDF (`crypto/hkdf.hpp`)
 
-Generic implementations templated on any type satisfying the `hash_function` concept (defined in `hash_concept.hpp`). HMAC implements RFC 2104, HKDF implements RFC 5869 (extract + expand).
+Generic implementations templated on any type satisfying the `hash_function` concept (defined in `crypto/hash_concept.hpp`). HMAC implements RFC 2104, HKDF implements RFC 5869 (extract + expand).
 
-### AES (`aes.hpp`)
+### AES (`crypto/aes.hpp`)
 
 Complete FIPS 197 AES block cipher as a template `aes_state<KeyBits>` supporting AES-128, AES-192, and AES-256. The S-box, inverse S-box, and round constants are computed at compile time from first principles via GF(2^8) arithmetic (multiplicative inverse + affine transform). Interface: `init(key)` → `encrypt_block(plaintext)` / `decrypt_block(ciphertext)`. Convenience aliases `aes128`, `aes192`, `aes256` and one-shot `aes_encrypt<KeyBits>()`/`aes_decrypt<KeyBits>()` functions.
 
-### TLS 1.2 PRF (`tls_prf.hpp`)
+### TLS 1.2 PRF (`crypto/tls_prf.hpp`)
 
 TLS 1.2 pseudorandom function per RFC 5246 Section 5. `p_hash<THash, L>()` iterates HMAC to produce `L` bytes of output via the A(i) chain. `tls_prf<THash, L>()` prepends the label to the seed and calls `p_hash`. Templated on any `hash_function` — SHA-256 for the default TLS 1.2 cipher suites, SHA-384 for AES-256 suites.
 
-### RSA-PSS (`rsa.hpp`)
+### RSA-PSS (`crypto/rsa.hpp`)
 
 RSA signature signing and verification per RFC 8017. Supports both **RSA-PSS** (RSASSA-PSS, Sections 8.1/9.1) and **PKCS#1 v1.5** (RSASSA-PKCS1-v1_5, Sections 8.2/9.2). PSS uses MGF1 mask generation with caller-supplied salt. PKCS#1 v1.5 uses hardcoded DigestInfo DER prefixes for SHA-256/384/512 per Section 9.2 Note 1. Templated on `TNum` (big integer type, must be double the modulus width for intermediate product safety) and `THash` (any `hash_function`). Standard configurations: RSA-2048/SHA-256 with `number<uint32_t, 128>`, RSA-4096/SHA-384 with `number<uint32_t, 256>`.
 
-### GCM (`gcm.hpp`)
+### GCM (`crypto/gcm.hpp`)
 
-GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation.
+GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `crypto/block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation.
 
 ## ASN.1 Definitions
 
@@ -192,7 +202,8 @@ The test suite is comprehensive:
 | `test_x509_verify.cpp` | Certificate chain verification, TBS extraction, key extraction, trust store |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
-| `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, and RSA-PSS work with OpenSSL CLI |
+| `x509_tool.cpp` | Standalone X.509 chain verification utility |
+| `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
 
 ## Build
 
@@ -206,4 +217,4 @@ ctest --test-dir build
 
 ## Design Philosophy
 
-The library is layered bottom-up: containers → lexer → parser → AST → DER codec → codegen → PEM, and separately: big integers → field elements → curve points → ECDSA/ECDH, with SHA-2 → HMAC → HKDF as the hash stack. Everything is header-only, template-heavy, and constexpr. The goal is educational — demonstrating how ASN.1, DER, and ECC work from first principles in modern C++, with the novel twist that the entire pipeline can run at compile time.
+The library is organized into four modules with clean dependency boundaries: `asn1/` (pure parsing, no crypto), `number/` (standalone big integers), `crypto/` (cryptographic algorithms built on `number/`), and `x509/` (certificate verification combining `asn1/` and `crypto/`). Within each module, the code is layered bottom-up: containers → lexer → parser → AST → DER codec → codegen → PEM, and separately: big integers → field elements → curve points → ECDSA/ECDH, with SHA-2 → HMAC → HKDF as the hash stack. Everything is header-only, template-heavy, and constexpr. The goal is educational — demonstrating how ASN.1, DER, and ECC work from first principles in modern C++, with the novel twist that the entire pipeline can run at compile time.

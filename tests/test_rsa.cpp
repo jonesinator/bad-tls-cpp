@@ -1,5 +1,5 @@
-#include <number/rsa.hpp>
-#include <number/sha2.hpp>
+#include <crypto/rsa.hpp>
+#include <crypto/sha2.hpp>
 #include <cassert>
 #include <cstdint>
 #include <array>

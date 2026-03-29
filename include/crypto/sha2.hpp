@@ -15,7 +15,7 @@
 #ifndef SHA2_HPP_
 #define SHA2_HPP_
 
-#include "number.hpp"
+#include <number/number.hpp>
 #include <array>
 #include <bit>
 #include <cstdint>

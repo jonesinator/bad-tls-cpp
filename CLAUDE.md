@@ -16,9 +16,11 @@ Compiler must support C++26. The build uses `-Wall -Wextra -pedantic -Werror` �
 
 Header-only library. No `.cpp` source files — only headers under `include/` and test files under `tests/`.
 
-Two independent module trees sharing no code:
-- **`include/asn1/`** — ASN.1 parsing and DER encoding. Pipeline: lexer → parser → AST → DER codegen → PEM. Supports string types (UTF8String, PrintableString, IA5String, etc.) and time types (UTCTime, GeneralizedTime) for X.509 certificate parsing. The `x509/` subdirectory provides certificate chain verification with a modular `certificate_verifier` concept for custom policies.
-- **`include/number/`** — Cryptographic math. Pipeline: big integers → field elements → curve points → ECDSA/ECDH, plus SHA-2 → HMAC → HKDF → TLS PRF, plus AES → GCM authenticated encryption, plus RSA-PSS signatures.
+Four modules with a strict dependency DAG (`number` ← `asn1`, `crypto` ← `x509`):
+- **`include/asn1/`** — Pure ASN.1 parsing and DER encoding. Pipeline: lexer → parser → AST → DER codegen → PEM. Supports string types (UTF8String, PrintableString, IA5String, etc.) and time types (UTCTime, GeneralizedTime). No crypto dependency.
+- **`include/number/`** — Fixed-width big integer arithmetic (`number<TDigit, NDigits>`). Standalone, no dependencies on other modules.
+- **`include/crypto/`** — Cryptographic algorithms built on `number/`. ECC (field elements, curve points, ECDSA, ECDH), hashing (SHA-2, HMAC, HKDF, TLS PRF), symmetric encryption (AES, GCM), and RSA-PSS signatures.
+- **`include/x509/`** — X.509 certificate chain verification. Depends on both `asn1/` (parsing) and `crypto/` (signature verification). Provides a modular `certificate_verifier` concept for custom policies.
 
 The `number/` headers are also available at `/home/aaron/projects/number` as a separate working directory.
 

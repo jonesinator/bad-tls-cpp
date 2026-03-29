@@ -9,7 +9,7 @@
  * Returns exit code 0 on success, 1 on verification failure.
  */
 
-#include <asn1/x509/trust_store.hpp>
+#include <x509/trust_store.hpp>
 #include <cstdio>
 #include <cstring>
 #include <fstream>

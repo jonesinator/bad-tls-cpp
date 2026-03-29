@@ -15,7 +15,7 @@
 #ifndef RSA_HPP_
 #define RSA_HPP_
 
-#include "number.hpp"
+#include <number/number.hpp>
 #include "hash_concept.hpp"
 #include <array>
 #include <cstdint>
