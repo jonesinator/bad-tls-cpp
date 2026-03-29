@@ -77,6 +77,11 @@ target_link_libraries(tls_connect_tool PRIVATE asn1)
 target_include_directories(tls_connect_tool PRIVATE ${CMAKE_SOURCE_DIR})
 target_compile_options(tls_connect_tool PRIVATE -Wall -Wextra -pedantic -Werror -O2 --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
 
+option(STATIC_TOOLS "Link tool executables statically" OFF)
+if(STATIC_TOOLS)
+    target_link_options(tls_connect_tool PRIVATE -static)
+endif()
+
 # Full check: build everything, run unit tests, OpenSSL interop, TLS integration
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} --output-on-failure

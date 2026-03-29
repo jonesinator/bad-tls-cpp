@@ -12,6 +12,6 @@ RUN apt-get update && \
 WORKDIR /src
 COPY . .
 
-RUN cmake -B build -G Ninja
+RUN cmake -B build -G Ninja -DSTATIC_TOOLS=ON
 RUN cmake --build build
 RUN cmake --build build --target check

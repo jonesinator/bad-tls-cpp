@@ -1,0 +1,47 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test in container
+        run: |
+          docker build --no-cache -f Containerfile -t asn1-check .
+
+      - name: Extract static binary
+        run: |
+          container_id=$(docker create asn1-check)
+          docker cp "$container_id:/src/build/tls_connect_tool" tls_connect_tool
+          docker rm "$container_id"
+          chmod +x tls_connect_tool
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: asn1-check
+          artifact-name: sbom-tls_connect_tool.spdx.json
+          output-file: sbom-tls_connect_tool.spdx.json
+
+      - name: Attest binary
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: tls_connect_tool
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls_connect_tool-linux-amd64
+          path: tls_connect_tool
