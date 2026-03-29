@@ -56,6 +56,7 @@ add_asn1_test(test_tls_client)
 add_asn1_test(test_mozilla_roots)
 add_asn1_test(test_hostname_verifier)
 add_asn1_test(test_tcp_transport)
+add_asn1_test(test_private_key)
 
 add_executable(x509_tool tests/x509_tool.cpp)
 target_link_libraries(x509_tool PRIVATE asn1)

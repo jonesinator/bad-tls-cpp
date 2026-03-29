@@ -190,6 +190,91 @@ run_test_fail "client without cert -> rejected" \
 
 stop_server
 
+# ========== Test 4: RSA server certificate ==========
+echo ""
+echo "=== Generating RSA test PKI ==="
+
+# RSA server key and CA-signed cert
+openssl genrsa -traditional -out "$TMPDIR/rsa_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/rsa_ca_key.pem" -out "$TMPDIR/rsa_ca.pem" \
+    -days 1 -subj "/CN=RSA Test CA" -sha256 2>/dev/null
+
+openssl genrsa -traditional -out "$TMPDIR/rsa_server_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/rsa_server_key.pem" -out "$TMPDIR/rsa_server.csr" \
+    -subj "/CN=localhost" -sha256 2>/dev/null
+
+openssl x509 -req -in "$TMPDIR/rsa_server.csr" -CA "$TMPDIR/rsa_ca.pem" \
+    -CAkey "$TMPDIR/rsa_ca_key.pem" -CAcreateserial -out "$TMPDIR/rsa_server.pem" \
+    -days 1 -sha256 -extfile "$TMPDIR/ext.cnf" -extensions v3_req 2>/dev/null
+
+cat "$TMPDIR/rsa_server.pem" "$TMPDIR/rsa_ca.pem" > "$TMPDIR/rsa_chain.pem"
+
+for SUITE in ECDHE-RSA-AES128-GCM-SHA256 ECDHE-RSA-AES256-GCM-SHA384; do
+    echo ""
+    echo "=== Test: RSA TLS ($SUITE) ==="
+    PORT=$(get_port 14436)
+    start_server "$PORT" "$TMPDIR/rsa_chain.pem" "$TMPDIR/rsa_server_key.pem"
+
+    run_test "curl $SUITE -> Hello, world!" "Hello, world!" \
+        curl -s --cacert "$TMPDIR/rsa_ca.pem" --tlsv1.2 --tls-max 1.2 \
+        --ciphers "$SUITE" "https://localhost:$PORT/"
+
+    run_test "tls_connect_tool -> Hello, world!" "Hello, world!" \
+        "$CLIENT_TOOL" --cafile "$TMPDIR/rsa_ca.pem" localhost "$PORT"
+
+    stop_server
+done
+
+# ========== Test 5: RSA server with EC client mTLS ==========
+echo ""
+echo "=== Test: RSA server + EC client mTLS ==="
+PORT=$(get_port 14437)
+start_server "$PORT" --client-ca "$TMPDIR/client_ca.pem" \
+    "$TMPDIR/rsa_chain.pem" "$TMPDIR/rsa_server_key.pem"
+
+run_test "EC client cert with RSA server -> Hello, secure!" "Hello, secure!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/rsa_ca.pem" \
+    --cert "$TMPDIR/client_chain.pem" --key "$TMPDIR/client_key.pem" \
+    localhost "$PORT"
+
+run_test "curl EC client with RSA server -> Hello, secure!" "Hello, secure!" \
+    curl -s --cacert "$TMPDIR/rsa_ca.pem" --tlsv1.2 --tls-max 1.2 \
+    --ciphers ECDHE-RSA-AES128-GCM-SHA256 \
+    --cert "$TMPDIR/client.pem" --key "$TMPDIR/client_key.pem" \
+    "https://localhost:$PORT/"
+
+stop_server
+
+# ========== Test 6: RSA client cert with ECDSA server (cross-key mTLS) ==========
+echo ""
+echo "=== Test: ECDSA server + RSA client mTLS ==="
+
+# Generate RSA client cert
+openssl genrsa -traditional -out "$TMPDIR/rsa_client_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/rsa_client_key.pem" -out "$TMPDIR/rsa_client.csr" \
+    -subj "/CN=RSA Test Client" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/rsa_client.csr" -CA "$TMPDIR/client_ca.pem" \
+    -CAkey "$TMPDIR/client_ca_key.pem" -CAcreateserial -out "$TMPDIR/rsa_client.pem" \
+    -days 1 -sha256 2>/dev/null
+cat "$TMPDIR/rsa_client.pem" "$TMPDIR/client_ca.pem" > "$TMPDIR/rsa_client_chain.pem"
+
+PORT=$(get_port 14438)
+start_server "$PORT" --client-ca "$TMPDIR/client_ca.pem" \
+    "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem"
+
+run_test "RSA client cert with ECDSA server -> Hello, secure!" "Hello, secure!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" \
+    --cert "$TMPDIR/rsa_client_chain.pem" --key "$TMPDIR/rsa_client_key.pem" \
+    localhost "$PORT"
+
+run_test "curl RSA client with ECDSA server -> Hello, secure!" "Hello, secure!" \
+    curl -s --cacert "$TMPDIR/ca.pem" --tlsv1.2 --tls-max 1.2 \
+    --ciphers ECDHE-ECDSA-AES128-GCM-SHA256 \
+    --cert "$TMPDIR/rsa_client.pem" --key "$TMPDIR/rsa_client_key.pem" \
+    "https://localhost:$PORT/"
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

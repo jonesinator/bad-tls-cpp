@@ -76,6 +76,30 @@ expect_fail wrong.host.badssl.com "hostname mismatch"
 expect_fail untrusted-root.badssl.com "untrusted root CA"
 
 echo ""
+echo "--- mTLS with client certificate (client.badssl.com) ---"
+TMPDIR=$(mktemp -d)
+cleanup() { rm -rf "$TMPDIR"; }
+trap cleanup EXIT
+
+# Download and decrypt the badssl.com client cert (RSA, encrypted PKCS#8)
+curl -sf https://badssl.com/certs/badssl.com-client.pem -o "$TMPDIR/badssl-client.pem"
+openssl pkey -in "$TMPDIR/badssl-client.pem" -passin pass:badssl.com \
+    -out "$TMPDIR/badssl-client-key.pem" -traditional 2>/dev/null
+openssl x509 -in "$TMPDIR/badssl-client.pem" -out "$TMPDIR/badssl-client-cert.pem" 2>/dev/null
+
+TOTAL=$((TOTAL + 1))
+printf "  %-35s " "client.badssl.com (mTLS)"
+if output=$("$TOOL" --cert "$TMPDIR/badssl-client-cert.pem" \
+    --key "$TMPDIR/badssl-client-key.pem" client.badssl.com 443 2>&1); then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL"
+    echo "    Output: $(echo "$output" | tail -5)"
+    FAIL=$((FAIL + 1))
+fi
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 if [ "$FAIL" -ne 0 ]; then

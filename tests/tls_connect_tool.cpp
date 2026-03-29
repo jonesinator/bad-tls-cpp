@@ -87,7 +87,8 @@ int main(int argc, char* argv[]) {
 
     // Load client certificate and key (mTLS)
     std::vector<std::vector<uint8_t>> client_cert_chain;
-    tls::loaded_key client_loaded{{asn1::x509::p256_curve::number_type{}}, tls::NamedCurve::secp256r1};
+    tls::loaded_key client_loaded{tls::tls_private_key{tls::p256_curve::number_type{}}, tls::NamedCurve::secp256r1, tls::key_type::ec};
+    bool have_client_cert = false;
     if (certfile && keyfile) {
         std::printf("Loading client certificate from %s...\n", certfile);
         std::ifstream cf(certfile);
@@ -110,7 +111,13 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         std::string key_pem{std::istreambuf_iterator<char>(kf), {}};
-        client_loaded = tls::load_ec_private_key(key_pem);
+        client_loaded = tls::load_private_key(key_pem);
+        have_client_cert = true;
+        if (client_loaded.type == tls::key_type::rsa)
+            std::printf("Client key type: RSA\n");
+        else
+            std::printf("Client key type: EC (%s)\n",
+                client_loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" : "P-384");
     }
 
     std::printf("Connecting to %s:%u...\n", hostname.c_str(), port);
@@ -125,7 +132,7 @@ int main(int argc, char* argv[]) {
     tls::client_config cfg;
     cfg.trust = &roots;
     cfg.hostname = hostname;
-    if (!client_cert_chain.empty()) {
+    if (have_client_cert) {
         cfg.client_certificate_chain = client_cert_chain;
         cfg.client_private_key = client_loaded.key;
         cfg.client_key_curve = client_loaded.curve;

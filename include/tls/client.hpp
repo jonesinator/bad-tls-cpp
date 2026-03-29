@@ -49,8 +49,8 @@ struct client_config {
 
     // Client certificate for mTLS (empty span = no client cert)
     std::span<const std::vector<uint8_t>> client_certificate_chain;
-    ec_private_key client_private_key;
-    NamedCurve client_key_curve = NamedCurve::secp256r1;
+    tls_private_key client_private_key;
+    NamedCurve client_key_curve = NamedCurve::secp256r1;  // only meaningful for EC keys
 };
 
 template <transport Transport, random_generator RNG>
@@ -348,30 +348,48 @@ private:
             auto cv_hash = transcript.current_hash();
 
             CertificateVerify cv{};
-            if constexpr (Hash::digest_size == 32) {
-                cv.algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa};
-            } else {
-                cv.algorithm = {HashAlgorithm::sha384, SignatureAlgorithm::ecdsa};
-            }
 
-            auto encode_sig = [&](const auto& sig) {
-                asn1::der::Type<detail::EccMod, "ECDSA-Sig-Value"> der_sig;
-                der_sig.template get<"r">() = num_to_integer(sig.r);
-                der_sig.template get<"s">() = num_to_integer(sig.s);
-                asn1::der::Writer dw;
-                asn1::der::encode<detail::EccMod, detail::EccMod.find_type("ECDSA-Sig-Value")>(dw, der_sig);
-                auto der_bytes = std::move(dw).finish();
-                for (auto b : der_bytes) cv.signature.push_back(b);
-            };
+            if (auto* rsa_key = std::get_if<rsa_private_key<rsa_num>>(&config_.client_private_key)) {
+                // RSA client key: PKCS#1 v1.5 signature
+                if constexpr (Hash::digest_size == 32) {
+                    cv.algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::rsa};
+                } else {
+                    cv.algorithm = {HashAlgorithm::sha384, SignatureAlgorithm::rsa};
+                }
 
-            if (config_.client_key_curve == NamedCurve::secp256r1) {
-                auto* d = std::get_if<asn1::x509::p256_curve::number_type>(&config_.client_private_key);
-                if (!d) return {tls_error::internal_error};
-                encode_sig(ecdsa_sign<asn1::x509::p256_curve, Hash>(*d, cv_hash));
+                auto sig = rsa_pkcs1_v1_5_sign<asn1::x509::rsa_num, Hash>(*rsa_key, cv_hash);
+                auto sig_bytes = sig.value.to_bytes(std::endian::big);
+                size_t mod_bytes = (rsa_key->n.bit_width() + 7) / 8;
+                size_t offset = sig_bytes.size() - mod_bytes;
+                for (size_t i = 0; i < mod_bytes; ++i)
+                    cv.signature.push_back(sig_bytes[offset + i]);
             } else {
-                auto* d = std::get_if<asn1::x509::p384_curve::number_type>(&config_.client_private_key);
-                if (!d) return {tls_error::internal_error};
-                encode_sig(ecdsa_sign<asn1::x509::p384_curve, Hash>(*d, cv_hash));
+                // EC client key: ECDSA signature
+                if constexpr (Hash::digest_size == 32) {
+                    cv.algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa};
+                } else {
+                    cv.algorithm = {HashAlgorithm::sha384, SignatureAlgorithm::ecdsa};
+                }
+
+                auto encode_sig = [&](const auto& sig) {
+                    asn1::der::Type<detail::EccMod, "ECDSA-Sig-Value"> der_sig;
+                    der_sig.template get<"r">() = num_to_integer(sig.r);
+                    der_sig.template get<"s">() = num_to_integer(sig.s);
+                    asn1::der::Writer dw;
+                    asn1::der::encode<detail::EccMod, detail::EccMod.find_type("ECDSA-Sig-Value")>(dw, der_sig);
+                    auto der_bytes = std::move(dw).finish();
+                    for (auto b : der_bytes) cv.signature.push_back(b);
+                };
+
+                if (config_.client_key_curve == NamedCurve::secp256r1) {
+                    auto* d = std::get_if<asn1::x509::p256_curve::number_type>(&config_.client_private_key);
+                    if (!d) return {tls_error::internal_error};
+                    encode_sig(ecdsa_sign<asn1::x509::p256_curve, Hash>(*d, cv_hash));
+                } else {
+                    auto* d = std::get_if<asn1::x509::p384_curve::number_type>(&config_.client_private_key);
+                    if (!d) return {tls_error::internal_error};
+                    encode_sig(ecdsa_sign<asn1::x509::p384_curve, Hash>(*d, cv_hash));
+                }
             }
 
             TlsWriter<1024> cv_w;

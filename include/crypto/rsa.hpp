@@ -334,6 +334,12 @@ constexpr bool rsa_pss_verify(
 
 // --- RSASSA-PKCS1-v1_5 SIGN (RFC 8017 Section 8.2.1) ---
 
+// GCC -O2 emits a false-positive stringop-overflow when TNum::num_bytes is much larger
+// than the actual modulus size (e.g. 1024-byte backing for RSA-2048's 256-byte modulus).
+// The runtime indexing is safe because 'base' is always >= 0 and (base + k) == num_bytes.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+
 template <typename TNum, hash_function THash>
 constexpr rsa_signature<TNum> rsa_pkcs1_v1_5_sign(
     const rsa_private_key<TNum>& key,
@@ -363,6 +369,8 @@ constexpr rsa_signature<TNum> rsa_pkcs1_v1_5_sign(
 
     return {s};
 }
+
+#pragma GCC diagnostic pop
 
 // --- RSASSA-PKCS1-v1_5 VERIFY (RFC 8017 Section 8.2.2) ---
 

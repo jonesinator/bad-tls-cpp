@@ -37,7 +37,7 @@ bad-tls-cpp/
 │   │   ├── aes.hpp                   # AES block cipher (FIPS 197)
 │   │   ├── gcm.hpp                   # GCM authenticated encryption (SP 800-38D)
 │   │   ├── tls_prf.hpp               # TLS 1.2 PRF (RFC 5246)
-│   │   ├── rsa.hpp                   # RSA-PSS signing/verification (RFC 8017)
+│   │   ├── rsa.hpp                   # RSA-PSS and PKCS#1 v1.5 signing/verification (RFC 8017)
 │   │   ├── random.hpp                # Random number generation (concept + impls)
 │   │   ├── hash_concept.hpp          # Hash function concept
 │   │   └── block_cipher_concept.hpp  # Block cipher concept
@@ -58,7 +58,7 @@ bad-tls-cpp/
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
 │       ├── client.hpp                # tls_client handshake state machine
 │       ├── server.hpp                # tls_server handshake state machine
-│       ├── private_key.hpp           # EC private key loading from PEM
+│       ├── private_key.hpp           # EC and RSA private key loading from PEM
 │       └── tcp_transport.hpp         # POSIX TCP socket + listener transport
 └── tests/                            # Comprehensive test suite
 ```
@@ -255,15 +255,15 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 ### TLS Client (`tls/client.hpp`)
 
-`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, an optional `hostname` for SAN/CN verification, and optional client certificate + private key for mutual TLS (mTLS). When the server requests client authentication, the client sends its certificate chain and a CertificateVerify message signed with its EC private key. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
+`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, an optional `hostname` for SAN/CN verification, and optional client certificate + private key for mutual TLS (mTLS). Supports both EC and RSA client certificates: when the server requests client authentication, the client sends its certificate chain and a CertificateVerify message signed with ECDSA or RSA PKCS#1 v1.5 depending on the key type. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
 
 ### TLS Server (`tls/server.hpp`)
 
-`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), EC private key, ECDSA cipher suites to offer, and optional mTLS settings (`client_ca` trust store and `require_client_cert` flag). When `client_ca` is set, the server sends a CertificateRequest, verifies the client's certificate chain, and validates the CertificateVerify signature. `client_authenticated()` reports whether the client presented a valid certificate. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`. Currently supports ECDSA cipher suites only (P-256 and P-384).
+`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), private key (EC or RSA), cipher suites to offer, and optional mTLS settings (`client_ca` trust store and `require_client_cert` flag). Supports both ECDSA and RSA server certificates: the server auto-selects cipher suites matching its key type. When `client_ca` is set, the server sends a CertificateRequest advertising both RSA and ECDSA client certificate types, verifies the client's certificate chain, and validates the CertificateVerify signature (ECDSA or RSA PKCS#1 v1.5). `client_authenticated()` reports whether the client presented a valid certificate. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`.
 
 ### Private Key Loading (`tls/private_key.hpp`)
 
-Loads EC private keys from PEM files. Handles both SEC 1 format (`EC PRIVATE KEY` label, RFC 5915) and PKCS#8 format (`PRIVATE KEY` label, RFC 5958). Uses `#embed "definitions/ecprivatekey.asn1"` and the ASN.1 codegen to parse key structures. Auto-detects curve from private key byte length (32 bytes = P-256, 48 bytes = P-384). Returns a `loaded_key` with the private scalar as a variant and the detected `NamedCurve`.
+Loads EC and RSA private keys from PEM files. EC keys: handles SEC 1 format (`EC PRIVATE KEY`, RFC 5915) and PKCS#8 (`PRIVATE KEY`, RFC 5958), auto-detects curve from key byte length. RSA keys: handles PKCS#1 format (`RSA PRIVATE KEY`) and PKCS#8 (`PRIVATE KEY` with RSA OID). The unified `load_private_key()` auto-detects key type from PEM label and PKCS#8 algorithm OID. Returns a `loaded_key` with a `tls_private_key` variant (P-256, P-384, or RSA) and detected key type.
 
 ### TCP Transport (`tls/tcp_transport.hpp`)
 
@@ -307,11 +307,12 @@ The test suite is comprehensive:
 | `test_mozilla_roots.cpp` | Mozilla CA bundle loading (145 roots), subject DER extraction |
 | `test_hostname_verifier.cpp` | Exact/wildcard hostname matching, SAN extraction, CN fallback, verifier integration |
 | `test_tcp_transport.cpp` | Transport concept satisfaction, connection failure handling, move semantics |
+| `test_private_key.cpp` | EC and RSA private key loading from PKCS#1/PKCS#8 PEM, unified loader auto-detect, sign/verify roundtrip |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `tls_connect_tool.cpp` | End-to-end TLS client with `--cafile`, `--cert`, `--key` for custom CA and mTLS |
 | `tls_server_tool.cpp` | End-to-end TLS server with `--client-ca` and `--require-client-cert` for mTLS |
-| `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites |
-| `test_tls_server.sh` | Server integration test: basic TLS per cipher suite, optional/required mTLS with curl and tls_connect_tool |
+| `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites, mTLS with client.badssl.com (RSA client cert) |
+| `test_tls_server.sh` | Server integration test: ECDSA and RSA cipher suites, optional/required mTLS, cross-key-type mTLS (RSA client + ECDSA server and vice versa) |
 | `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |

@@ -97,12 +97,15 @@ int main(int argc, char* argv[]) {
     }
     std::printf("Loaded %zu certificate(s)\n", cert_chain.size());
 
-    // Load private key
+    // Load private key (auto-detects EC vs RSA)
     std::printf("Loading private key from %s...\n", key_path);
     auto key_pem = read_file(key_path);
-    auto loaded = tls::load_ec_private_key(key_pem);
-    std::printf("Key curve: %s\n",
-        loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" : "P-384");
+    auto loaded = tls::load_private_key(key_pem);
+    if (loaded.type == tls::key_type::rsa)
+        std::printf("Key type: RSA\n");
+    else
+        std::printf("Key type: EC (%s)\n",
+            loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" : "P-384");
 
     // Load client CA trust store (if mTLS)
     asn1::x509::trust_store client_ca_store;

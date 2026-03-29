@@ -4,8 +4,9 @@
  * Provides tls_server<Transport, RNG> that performs a full ECDHE
  * handshake and sends/receives encrypted application data.
  *
- * Supports ECDSA cipher suites:
+ * Supports ECDSA and RSA cipher suites:
  *   TLS_ECDHE_ECDSA_WITH_AES_{128,256}_GCM_SHA{256,384}
+ *   TLS_ECDHE_RSA_WITH_AES_{128,256}_GCM_SHA{256,384}
  */
 
 #pragma once
@@ -13,6 +14,7 @@
 #include "connection.hpp"
 #include "private_key.hpp"
 #include <crypto/ecdsa.hpp>
+#include <crypto/rsa.hpp>
 #include <crypto/random.hpp>
 #include <asn1/der/codegen.hpp>
 #include <x509/trust_store.hpp>
@@ -25,16 +27,18 @@ struct server_config {
     // Certificate chain DER bytes (leaf first)
     std::span<const std::vector<uint8_t>> certificate_chain;
 
-    // EC private key
-    ec_private_key private_key;
-    NamedCurve private_key_curve = NamedCurve::secp256r1;
+    // Private key (EC or RSA)
+    tls_private_key private_key;
+    NamedCurve private_key_curve = NamedCurve::secp256r1;  // for EC keys: ECDHE curve
 
-    // Cipher suites the server supports (ECDSA only)
-    std::array<CipherSuite, 2> cipher_suites = {
+    // Cipher suites the server supports
+    std::array<CipherSuite, 4> cipher_suites = {
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     };
-    size_t num_cipher_suites = 2;
+    size_t num_cipher_suites = 4;
 
     // Supported curves for ECDHE
     std::array<NamedCurve, 2> curves = {NamedCurve::secp256r1, NamedCurve::secp384r1};
@@ -81,12 +85,21 @@ public:
         auto client_hello = read_client_hello(ch_body_r);
         client_random_ = client_hello.random;
 
+        // Filter cipher suites: only offer suites matching our key type
+        bool is_rsa_key = std::holds_alternative<rsa_private_key<rsa_num>>(config_.private_key);
+
         // Select cipher suite: first server-preferred suite offered by client
         bool suite_found = false;
         for (size_t i = 0; i < config_.num_cipher_suites && !suite_found; ++i) {
+            auto suite = config_.cipher_suites[i];
+            // Skip suites that don't match our key type
+            bool suite_is_rsa = (suite == CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ||
+                                 suite == CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384);
+            if (suite_is_rsa != is_rsa_key) continue;
+
             for (size_t j = 0; j < client_hello.cipher_suites.size(); ++j) {
-                if (config_.cipher_suites[i] == client_hello.cipher_suites[j]) {
-                    negotiated_suite_ = config_.cipher_suites[i];
+                if (suite == client_hello.cipher_suites[j]) {
+                    negotiated_suite_ = suite;
                     suite_found = true;
                     break;
                 }
@@ -196,9 +209,32 @@ private:
         return result{priv, point_bytes};
     }
 
-    // Sign the ServerKeyExchange parameters
+    // Build signed data for ServerKeyExchange: client_random || server_random || server_params
+    static auto build_ske_signed_data(
+        const Random& client_random, const Random& server_random,
+        NamedCurve curve, const asn1::FixedVector<uint8_t, 133>& ecdhe_pub)
+    {
+        std::array<uint8_t, 201> signed_data{};
+        size_t pos = 0;
+        for (size_t i = 0; i < 32; ++i) signed_data[pos++] = client_random[i];
+        for (size_t i = 0; i < 32; ++i) signed_data[pos++] = server_random[i];
+        signed_data[pos++] = static_cast<uint8_t>(ECCurveType::named_curve);
+        signed_data[pos++] = static_cast<uint8_t>(static_cast<uint16_t>(curve) >> 8);
+        signed_data[pos++] = static_cast<uint8_t>(static_cast<uint16_t>(curve));
+        signed_data[pos++] = static_cast<uint8_t>(ecdhe_pub.size());
+        for (size_t i = 0; i < ecdhe_pub.size(); ++i)
+            signed_data[pos++] = ecdhe_pub[i];
+
+        struct result {
+            std::array<uint8_t, 201> data;
+            size_t length;
+        };
+        return result{signed_data, pos};
+    }
+
+    // Sign ServerKeyExchange with ECDSA
     template <typename TCurve, typename THash>
-    ServerKeyExchangeEcdhe build_server_key_exchange(
+    ServerKeyExchangeEcdhe build_server_key_exchange_ecdsa(
         NamedCurve curve,
         const asn1::FixedVector<uint8_t, 133>& ecdhe_pub,
         const typename TCurve::number_type& signing_key)
@@ -207,20 +243,9 @@ private:
         ske.named_curve = curve;
         ske.public_key = ecdhe_pub;
 
-        // Build signed data: client_random || server_random || server_params
-        std::array<uint8_t, 201> signed_data{};
-        size_t pos = 0;
-        for (size_t i = 0; i < 32; ++i) signed_data[pos++] = client_random_[i];
-        for (size_t i = 0; i < 32; ++i) signed_data[pos++] = server_random_[i];
-        signed_data[pos++] = static_cast<uint8_t>(ECCurveType::named_curve);
-        signed_data[pos++] = static_cast<uint8_t>(static_cast<uint16_t>(curve) >> 8);
-        signed_data[pos++] = static_cast<uint8_t>(static_cast<uint16_t>(curve));
-        signed_data[pos++] = static_cast<uint8_t>(ecdhe_pub.size());
-        for (size_t i = 0; i < ecdhe_pub.size(); ++i)
-            signed_data[pos++] = ecdhe_pub[i];
+        auto [signed_data, pos] = build_ske_signed_data(client_random_, server_random_, curve, ecdhe_pub);
         auto data_span = std::span<const uint8_t>(signed_data.data(), pos);
 
-        // Hash and sign
         THash h;
         h.init();
         h.update(data_span);
@@ -228,7 +253,6 @@ private:
         auto sig = ecdsa_sign<TCurve, THash>(signing_key, hash);
         auto der_sig = encode_ecdsa_signature(sig);
 
-        // Set signature algorithm
         if constexpr (THash::digest_size == 32) {
             ske.sig_algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa};
         } else {
@@ -237,6 +261,42 @@ private:
 
         for (auto b : der_sig)
             ske.signature.push_back(b);
+
+        return ske;
+    }
+
+    // Sign ServerKeyExchange with RSA PKCS#1 v1.5
+    template <typename THash>
+    ServerKeyExchangeEcdhe build_server_key_exchange_rsa(
+        NamedCurve curve,
+        const asn1::FixedVector<uint8_t, 133>& ecdhe_pub,
+        const rsa_private_key<asn1::x509::rsa_num>& signing_key)
+    {
+        ServerKeyExchangeEcdhe ske{};
+        ske.named_curve = curve;
+        ske.public_key = ecdhe_pub;
+
+        auto [signed_data, pos] = build_ske_signed_data(client_random_, server_random_, curve, ecdhe_pub);
+        auto data_span = std::span<const uint8_t>(signed_data.data(), pos);
+
+        THash h;
+        h.init();
+        h.update(data_span);
+        auto hash = h.finalize();
+        auto sig = rsa_pkcs1_v1_5_sign<asn1::x509::rsa_num, THash>(signing_key, hash);
+
+        if constexpr (THash::digest_size == 32) {
+            ske.sig_algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::rsa};
+        } else {
+            ske.sig_algorithm = {HashAlgorithm::sha384, SignatureAlgorithm::rsa};
+        }
+
+        // Encode RSA signature as big-endian bytes (modulus size)
+        auto sig_bytes = sig.value.to_bytes(std::endian::big);
+        size_t mod_bytes = (signing_key.n.bit_width() + 7) / 8;
+        size_t offset = sig_bytes.size() - mod_bytes;
+        for (size_t i = 0; i < mod_bytes; ++i)
+            ske.signature.push_back(sig_bytes[offset + i]);
 
         return ske;
     }
@@ -324,13 +384,12 @@ private:
         if (!cert_err) return {cert_err.error};
 
         // --- Send ServerKeyExchange ---
-        // Determine ECDHE curve (use private key curve)
-        NamedCurve ecdhe_curve = config_.private_key_curve;
+        // For RSA keys, use P-256 as default ECDHE curve
+        bool is_rsa_key = std::holds_alternative<rsa_private_key<rsa_num>>(config_.private_key);
+        NamedCurve ecdhe_curve = is_rsa_key ? NamedCurve::secp256r1 : config_.private_key_curve;
 
-        // Generate ephemeral ECDH and sign, dispatching on curve
+        // Generate ephemeral ECDH and sign, dispatching on curve and key type
         ServerKeyExchangeEcdhe ske;
-        // We need to store the ephemeral private key for later ECDH
-        // Use a variant to hold it
         std::variant<
             asn1::x509::p256_curve::number_type,
             asn1::x509::p384_curve::number_type
@@ -340,18 +399,30 @@ private:
             auto kp = generate_ecdhe_keypair<asn1::x509::p256_curve>(rng_);
             eph_priv = kp.private_key;
 
-            auto* signing_key = std::get_if<asn1::x509::p256_curve::number_type>(&config_.private_key);
-            if (!signing_key) return {tls_error::internal_error};
-            ske = build_server_key_exchange<asn1::x509::p256_curve, Hash>(
-                ecdhe_curve, kp.public_key_bytes, *signing_key);
+            if (is_rsa_key) {
+                auto* rsa_key = std::get_if<rsa_private_key<rsa_num>>(&config_.private_key);
+                if (!rsa_key) return {tls_error::internal_error};
+                ske = build_server_key_exchange_rsa<Hash>(ecdhe_curve, kp.public_key_bytes, *rsa_key);
+            } else {
+                auto* signing_key = std::get_if<asn1::x509::p256_curve::number_type>(&config_.private_key);
+                if (!signing_key) return {tls_error::internal_error};
+                ske = build_server_key_exchange_ecdsa<asn1::x509::p256_curve, Hash>(
+                    ecdhe_curve, kp.public_key_bytes, *signing_key);
+            }
         } else if (ecdhe_curve == NamedCurve::secp384r1) {
             auto kp = generate_ecdhe_keypair<asn1::x509::p384_curve>(rng_);
             eph_priv = kp.private_key;
 
-            auto* signing_key = std::get_if<asn1::x509::p384_curve::number_type>(&config_.private_key);
-            if (!signing_key) return {tls_error::internal_error};
-            ske = build_server_key_exchange<asn1::x509::p384_curve, Hash>(
-                ecdhe_curve, kp.public_key_bytes, *signing_key);
+            if (is_rsa_key) {
+                auto* rsa_key = std::get_if<rsa_private_key<rsa_num>>(&config_.private_key);
+                if (!rsa_key) return {tls_error::internal_error};
+                ske = build_server_key_exchange_rsa<Hash>(ecdhe_curve, kp.public_key_bytes, *rsa_key);
+            } else {
+                auto* signing_key = std::get_if<asn1::x509::p384_curve::number_type>(&config_.private_key);
+                if (!signing_key) return {tls_error::internal_error};
+                ske = build_server_key_exchange_ecdsa<asn1::x509::p384_curve, Hash>(
+                    ecdhe_curve, kp.public_key_bytes, *signing_key);
+            }
         } else {
             return {tls_error::unsupported_curve};
         }
@@ -367,8 +438,13 @@ private:
         if (config_.client_ca) {
             cert_requested = true;
             CertificateRequest cr{};
-            // ecdsa_sign(1) certificate type
+            // Advertise both RSA and ECDSA client certificate types
+            cr.certificate_types.push_back(1);  // rsa_sign
             cr.certificate_types.push_back(64); // ecdsa_sign
+            cr.supported_signature_algorithms.push_back(
+                {HashAlgorithm::sha256, SignatureAlgorithm::rsa});
+            cr.supported_signature_algorithms.push_back(
+                {HashAlgorithm::sha384, SignatureAlgorithm::rsa});
             cr.supported_signature_algorithms.push_back(
                 {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa});
             cr.supported_signature_algorithms.push_back(
@@ -481,18 +557,26 @@ private:
             uint16_t sig_len = cv_r.read_u16();
             auto sig_data = cv_r.read_bytes(sig_len);
 
-            // Verify ECDSA signature over pre-CertificateVerify transcript hash
-            if (cv_alg.signature != SignatureAlgorithm::ecdsa)
-                return {tls_error::handshake_failure};
-
             auto cv_sig_bytes = std::span<const uint8_t>(sig_data.data(), sig_len);
             bool sig_ok = false;
-            if (auto* key = std::get_if<point<asn1::x509::p256_curve>>(&client_pub_key)) {
-                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p256_curve>(cv_sig_bytes);
-                sig_ok = ecdsa_verify<asn1::x509::p256_curve, Hash>(*key, pre_cv_hash, sig);
-            } else if (auto* key = std::get_if<point<asn1::x509::p384_curve>>(&client_pub_key)) {
-                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p384_curve>(cv_sig_bytes);
-                sig_ok = ecdsa_verify<asn1::x509::p384_curve, Hash>(*key, pre_cv_hash, sig);
+
+            if (cv_alg.signature == SignatureAlgorithm::ecdsa) {
+                if (auto* key = std::get_if<point<asn1::x509::p256_curve>>(&client_pub_key)) {
+                    auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p256_curve>(cv_sig_bytes);
+                    sig_ok = ecdsa_verify<asn1::x509::p256_curve, Hash>(*key, pre_cv_hash, sig);
+                } else if (auto* key = std::get_if<point<asn1::x509::p384_curve>>(&client_pub_key)) {
+                    auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p384_curve>(cv_sig_bytes);
+                    sig_ok = ecdsa_verify<asn1::x509::p384_curve, Hash>(*key, pre_cv_hash, sig);
+                }
+            } else if (cv_alg.signature == SignatureAlgorithm::rsa) {
+                auto* key = std::get_if<rsa_public_key<asn1::x509::rsa_num>>(&client_pub_key);
+                if (key) {
+                    rsa_signature<asn1::x509::rsa_num> sig{
+                        asn1::x509::rsa_num::from_bytes(cv_sig_bytes)};
+                    sig_ok = rsa_pkcs1_v1_5_verify<asn1::x509::rsa_num, Hash>(*key, pre_cv_hash, sig);
+                }
+            } else {
+                return {tls_error::handshake_failure};
             }
 
             if (!sig_ok)
