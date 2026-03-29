@@ -312,6 +312,7 @@ The test suite is comprehensive:
 | `tls_server_tool.cpp` | End-to-end TLS server: loads EC key + cert, listens, serves "Hello, world!" |
 | `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites |
 | `test_tls_server.sh` | Server integration test: generates PKI, tests with curl and tls_connect_tool |
+| `test_tls_openssl_server.sh` | Third-party server test: our client connects to openssl s_server |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
