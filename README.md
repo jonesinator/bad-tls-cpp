@@ -38,6 +38,7 @@ asn1/
 │   │   ├── gcm.hpp              # GCM authenticated encryption (SP 800-38D)
 │   │   ├── tls_prf.hpp          # TLS 1.2 PRF (RFC 5246)
 │   │   ├── rsa.hpp              # RSA-PSS signing/verification (RFC 8017)
+│   │   ├── random.hpp           # Random number generation (concept + impls)
 │   │   ├── hash_concept.hpp     # Hash function concept
 │   │   └── block_cipher_concept.hpp  # Block cipher concept
 │   ├── x509/                    # X.509 certificate verification (depends on asn1/ + crypto/)
@@ -182,6 +183,14 @@ RSA signature signing and verification per RFC 8017. Supports both **RSA-PSS** (
 
 GCM (Galois/Counter Mode) authenticated encryption per NIST SP 800-38D. Templated on any type satisfying the `block_cipher` concept (defined in `crypto/block_cipher_concept.hpp`). Implements GF(2^128) multiplication (schoolbook algorithm with GCM's bit-reflected convention), GHASH, and the full GCM encrypt/decrypt pipeline. `gcm_encrypt<Cipher, N>()` returns ciphertext + 128-bit authentication tag. `gcm_decrypt<Cipher, N>()` returns `std::optional` — `std::nullopt` on tag verification failure. Supports standard 12-byte IVs and arbitrary-length IVs via GHASH-based J0 computation. Runtime-length variants `gcm_encrypt_rt`/`gcm_decrypt_rt` accept `std::span` for variable-length payloads (used by TLS record protection).
 
+### Random Number Generation (`crypto/random.hpp`)
+
+Defines a `random_generator` concept requiring a single `fill(std::span<uint8_t>)` method. Two implementations:
+- **`system_random`**: CSPRNG backed by `std::random_device`. Runtime only.
+- **`xoshiro256ss`**: Deterministic PRNG (Blackman & Vigna, 2018) seeded from a `uint64_t`. Fully constexpr — suitable for compile-time testing but **not** cryptographically secure.
+
+Helper functions: `random_bytes<N>(rng)` fills an `std::array`, `random_scalar<TCurve>(rng)` generates a value in [1, n-1] via rejection sampling for ECC key generation.
+
 ## The TLS 1.2 Layer (`tls/`)
 
 The TLS module implements the data layer for TLS 1.2 (RFC 5246): types, binary serialization, key derivation, and record-level encryption. It uses its own big-endian binary framing, not ASN.1 DER.
@@ -244,6 +253,7 @@ The test suite is comprehensive:
 | `test_ecdh.cpp` | Keypair derivation, validation, shared secret, HKDF integration |
 | `test_aes.cpp` | AES-128/192/256 FIPS 197 test vectors, encrypt/decrypt roundtrip, compile-time verification |
 | `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
+| `test_random.cpp` | Concept satisfaction, xoshiro determinism, system_random output, random_scalar bounds |
 | `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
 | `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
 | `test_x509.cpp` | X.509 certificate parsing, field extraction, RDN access, extension parsing |

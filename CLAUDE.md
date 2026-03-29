@@ -19,7 +19,7 @@ Header-only library. No `.cpp` source files — only headers under `include/` an
 Five modules with a strict dependency DAG (`number` ← `asn1`, `crypto` ← `x509`, `tls`):
 - **`include/asn1/`** — Pure ASN.1 parsing and DER encoding. Pipeline: lexer → parser → AST → DER codegen → PEM. Supports string types (UTF8String, PrintableString, IA5String, etc.) and time types (UTCTime, GeneralizedTime). No crypto dependency.
 - **`include/number/`** — Fixed-width big integer arithmetic (`number<TDigit, NDigits>`). Standalone, no dependencies on other modules.
-- **`include/crypto/`** — Cryptographic algorithms built on `number/`. ECC (field elements, curve points, ECDSA, ECDH), hashing (SHA-2, HMAC, HKDF, TLS PRF), symmetric encryption (AES, GCM), and RSA-PSS signatures.
+- **`include/crypto/`** — Cryptographic algorithms built on `number/`. ECC (field elements, curve points, ECDSA, ECDH), hashing (SHA-2, HMAC, HKDF, TLS PRF), symmetric encryption (AES, GCM), RSA-PSS signatures, and random number generation (`random_generator` concept with `system_random` CSPRNG and `xoshiro256ss` constexpr PRNG).
 - **`include/x509/`** — X.509 certificate chain verification. Depends on both `asn1/` (parsing) and `crypto/` (signature verification). Provides a modular `certificate_verifier` concept for custom policies.
 - **`include/tls/`** — TLS 1.2 data layer. Record framing, handshake message types, cipher suite definitions, key schedule (master secret, key expansion), AES-GCM record protection, and transcript hashing. Depends on `crypto/`. Uses its own binary framing (big-endian, not ASN.1 DER). Supports four ECDHE+AES-GCM cipher suites.
 
