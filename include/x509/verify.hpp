@@ -267,6 +267,10 @@ inline bool verify_certificate_signature(
 }
 
 // --- Chain verification ---
+// Builds a trust path from the leaf (chain_der[0]) to a root in the trust
+// store, searching the chain as an unordered collection rather than assuming
+// strict sequential ordering. Handles cross-signed intermediates and chains
+// where a cert is itself a trust anchor.
 
 template <certificate_verifier... Vs>
 bool verify_chain(
@@ -282,43 +286,62 @@ bool verify_chain(
     for (auto& der : chain_der)
         certs.push_back(parse_certificate(der));
 
-    size_t n = certs.size();
+    // Helper: encode a Name field to canonical DER for comparison
+    auto encode_name = [](const auto& name) {
+        der::Writer w;
+        der::encode<X509Mod, X509Mod.find_type("Name")>(w, name);
+        return std::move(w).finish();
+    };
 
-    for (size_t i = 0; i < n; ++i) {
-        auto tbs_der = extract_tbs_der(chain_der[i]);
+    // Walk from leaf (index 0) up to a trust anchor
+    size_t current = 0;
+    constexpr size_t max_depth = 10;
+
+    for (size_t depth = 0; depth < max_depth; ++depth) {
+        // Run verifiers on this cert
+        auto tbs_der = extract_tbs_der(chain_der[current]);
         cert_context ctx{
-            .cert = certs[i],
-            .issuer = (i + 1 < n) ? &certs[i + 1] : nullptr,
-            .cert_der = chain_der[i],
+            .cert = certs[current],
+            .issuer = nullptr,
+            .cert_der = chain_der[current],
             .tbs_der = tbs_der,
-            .depth = i,
-            .chain_length = n
+            .depth = depth,
+            .chain_length = chain_der.size()
         };
-
-        // Run all verifiers (fold may be empty if no verifiers)
         if constexpr (sizeof...(Vs) > 0) {
             if (!(verifiers.verify(ctx) && ...))
                 return false;
         }
-        (void)ctx;  // suppress unused warning when no verifiers
 
-        // Signature verification
-        if (i + 1 < n) {
-            // Verify against next cert in chain
-            auto issuer_key = extract_public_key(certs[i + 1]);
-            if (!verify_certificate_signature(chain_der[i], certs[i], issuer_key))
-                return false;
-        } else {
-            // Last cert: must be in trust store
-            auto root = roots.find_issuer(certs[i]);
-            if (!root) return false;
+        // Check if this cert's issuer is a root in the trust store
+        auto root = roots.find_issuer(certs[current]);
+        if (root) {
             auto root_key = extract_public_key(root->cert);
-            if (!verify_certificate_signature(chain_der[i], certs[i], root_key))
-                return false;
+            return verify_certificate_signature(
+                chain_der[current], certs[current], root_key);
         }
-    }
 
-    return true;
+        // Search the chain for a cert whose subject matches this cert's issuer
+        auto issuer_name = encode_name(
+            certs[current].get<"tbsCertificate">().get<"issuer">());
+        bool found = false;
+        for (size_t j = 0; j < certs.size(); ++j) {
+            if (j == current) continue;
+            auto subject = encode_name(
+                certs[j].get<"tbsCertificate">().get<"subject">());
+            if (subject == issuer_name) {
+                auto issuer_key = extract_public_key(certs[j]);
+                if (!verify_certificate_signature(
+                        chain_der[current], certs[current], issuer_key))
+                    return false;
+                current = j;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return false;  // exceeded max depth
 }
 
 } // namespace asn1::x509

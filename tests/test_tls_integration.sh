@@ -55,9 +55,13 @@ expect_fail() {
 echo "=== TLS 1.2 Integration Tests ==="
 echo ""
 echo "--- Valid certificates (should connect) ---"
+expect_pass google.com
 expect_pass github.com
+expect_pass cloudflare.com
+expect_pass amazon.com
 expect_pass microsoft.com
 expect_pass wikipedia.org
+expect_pass mozilla.org
 expect_pass letsencrypt.org
 expect_pass sha256.badssl.com
 expect_pass httpbin.org
