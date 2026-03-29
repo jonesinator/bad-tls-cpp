@@ -12,6 +12,7 @@
 
 #include "connection.hpp"
 #include <crypto/random.hpp>
+#include <x509/hostname_verifier.hpp>
 #include <x509/trust_store.hpp>
 #include <vector>
 
@@ -39,6 +40,9 @@ struct client_config {
 
     // Optional trust store for certificate chain verification (nullptr to skip)
     const asn1::x509::trust_store* trust = nullptr;
+
+    // Optional hostname for SAN/CN verification (empty to skip)
+    std::string_view hostname;
 };
 
 template <transport Transport, random_generator RNG>
@@ -96,17 +100,19 @@ public:
         if (sh_rec.value.type != ContentType::handshake)
             return {tls_error::unexpected_message};
 
-        // Buffer full ServerHello fragment for transcript
+        // Parse ServerHello from the record fragment.
+        // The fragment may contain additional handshake messages after ServerHello.
         auto sh_frag = std::span<const uint8_t>(
             sh_rec.value.fragment.data.data(), sh_rec.value.fragment.size());
-        for (size_t i = 0; i < sh_frag.size(); ++i)
-            early_transcript.push_back(sh_frag[i]);
-
-        // Parse ServerHello (skip handshake header)
         TlsReader sh_r(sh_frag);
         auto sh_hdr = read_handshake_header(sh_r);
         if (sh_hdr.type != HandshakeType::server_hello)
             return {tls_error::unexpected_message};
+
+        // Buffer only the ServerHello handshake message for early transcript
+        size_t sh_msg_len = 4 + sh_hdr.length; // header(4) + body
+        for (size_t i = 0; i < sh_msg_len; ++i)
+            early_transcript.push_back(sh_frag[i]);
 
         auto sh_body = sh_r.read_bytes(sh_hdr.length);
         TlsReader sh_body_r(sh_body);
@@ -114,9 +120,15 @@ public:
         server_random_ = server_hello.random;
         negotiated_suite_ = server_hello.cipher_suite;
 
+        // Collect any leftover bytes in the record (additional handshake messages)
+        asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH> leftover;
+        while (sh_r.remaining() > 0) {
+            leftover.push_back(sh_r.read_u8());
+        }
+
         // Phase 2: dispatch into templated continuation
         return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
-            return handshake_continue<Traits>(early_transcript);
+            return handshake_continue<Traits>(early_transcript, leftover);
         });
     }
 
@@ -160,7 +172,8 @@ public:
 private:
     template <typename Traits>
     constexpr tls_result<void> handshake_continue(
-        const asn1::FixedVector<uint8_t, 4096>& early_bytes)
+        const asn1::FixedVector<uint8_t, 4096>& early_bytes,
+        const asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>& leftover)
     {
         using Hash = typename Traits::hash_type;
 
@@ -168,8 +181,10 @@ private:
         TranscriptHash<Hash> transcript;
         transcript.update(std::span<const uint8_t>(early_bytes.data.data(), early_bytes.len));
 
-        // Handshake reader for message framing
+        // Handshake reader for message framing, seeded with leftover bytes
         handshake_reader<Transport> hs_reader(rio_);
+        for (size_t i = 0; i < leftover.size(); ++i)
+            hs_reader.buf.push_back(leftover[i]);
 
         // --- Certificate ---
         auto cert_msg_res = hs_reader.next_message(transcript);
@@ -200,8 +215,18 @@ private:
                 auto& c = cert_msg.certificate_list[i];
                 chain_der_vec.emplace_back(c.data.data(), c.data.data() + c.len);
             }
-            if (!asn1::x509::verify_chain(chain_der_vec, *config_.trust))
+            try {
+                bool chain_ok = false;
+                if (!config_.hostname.empty()) {
+                    asn1::x509::hostname_verifier hv{config_.hostname};
+                    chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust, hv);
+                } else {
+                    chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust);
+                }
+                if (!chain_ok) return {tls_error::bad_certificate};
+            } catch (...) {
                 return {tls_error::bad_certificate};
+            }
         }
 
         // --- ServerKeyExchange ---

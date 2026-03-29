@@ -56,7 +56,8 @@ asn1/
 │       ├── transcript.hpp       # Handshake transcript hash accumulator
 │       ├── transport.hpp        # Transport concept + memory_transport mock
 │       ├── connection.hpp       # Record I/O, SKE verification, ECDH helpers
-│       └── client.hpp           # tls_client handshake state machine
+│       ├── client.hpp           # tls_client handshake state machine
+│       └── tcp_transport.hpp    # POSIX TCP socket transport
 └── tests/                       # Comprehensive test suite
 ```
 
@@ -252,7 +253,11 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 ### TLS Client (`tls/client.hpp`)
 
-`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, and an optional `trust_store` for certificate chain verification. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
+`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, and an optional `hostname` for SAN/CN verification. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
+
+### TCP Transport (`tls/tcp_transport.hpp`)
+
+POSIX socket implementation of the `transport` concept. Constructor takes `(hostname, port)` and connects via `getaddrinfo` (IPv4/IPv6). Blocking I/O, RAII (destructor closes), move-only. `write()` loops internally to ensure all bytes are sent. `read()` returns a single `::read()` result (partial reads handled by `record_io`).
 
 ## ASN.1 Definitions
 
@@ -291,7 +296,9 @@ The test suite is comprehensive:
 | `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |
 | `test_mozilla_roots.cpp` | Mozilla CA bundle loading (145 roots), subject DER extraction |
 | `test_hostname_verifier.cpp` | Exact/wildcard hostname matching, SAN extraction, CN fallback, verifier integration |
+| `test_tcp_transport.cpp` | Transport concept satisfaction, connection failure handling, move semantics |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
+| `tls_connect_tool.cpp` | End-to-end TLS client: connects to a server, handshakes, sends HTTP GET |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
