@@ -235,22 +235,32 @@ inline bool verify_certificate_signature(
         return rsa_pkcs1_v1_5_verify<rsa_num, sha512_state>(*key, hash, sig);
     }
 
-    // ECDSA + SHA-256 (P-256)
+    // ECDSA + SHA-256 (P-256 or P-384 key)
     if (sig_oid == "1.2.840.10045.4.3.2") {
         auto hash = sha256(tbs_bytes);
-        auto* key = std::get_if<point<p256_curve>>(&issuer_key);
-        if (!key) return false;
-        auto sig = detail::parse_ecdsa_signature<p256_curve>(sig_bits.bytes);
-        return ecdsa_verify<p256_curve, sha256_state>(*key, hash, sig);
+        if (auto* key = std::get_if<point<p256_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p256_curve>(sig_bits.bytes);
+            return ecdsa_verify<p256_curve, sha256_state>(*key, hash, sig);
+        }
+        if (auto* key = std::get_if<point<p384_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p384_curve>(sig_bits.bytes);
+            return ecdsa_verify<p384_curve, sha256_state>(*key, hash, sig);
+        }
+        return false;
     }
 
-    // ECDSA + SHA-384 (P-384)
+    // ECDSA + SHA-384 (P-256 or P-384 key)
     if (sig_oid == "1.2.840.10045.4.3.3") {
         auto hash = sha384(tbs_bytes);
-        auto* key = std::get_if<point<p384_curve>>(&issuer_key);
-        if (!key) return false;
-        auto sig = detail::parse_ecdsa_signature<p384_curve>(sig_bits.bytes);
-        return ecdsa_verify<p384_curve, sha384_state>(*key, hash, sig);
+        if (auto* key = std::get_if<point<p384_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p384_curve>(sig_bits.bytes);
+            return ecdsa_verify<p384_curve, sha384_state>(*key, hash, sig);
+        }
+        if (auto* key = std::get_if<point<p256_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p256_curve>(sig_bits.bytes);
+            return ecdsa_verify<p256_curve, sha384_state>(*key, hash, sig);
+        }
+        return false;
     }
 
     return false;  // unsupported algorithm

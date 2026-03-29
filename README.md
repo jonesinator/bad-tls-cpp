@@ -299,6 +299,7 @@ The test suite is comprehensive:
 | `test_tcp_transport.cpp` | Transport concept satisfaction, connection failure handling, move semantics |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `tls_connect_tool.cpp` | End-to-end TLS client: connects to a server, handshakes, sends HTTP GET |
+| `test_tls_integration.sh` | Integration test: connects to 10 public sites, rejects 2 bad-cert sites |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |

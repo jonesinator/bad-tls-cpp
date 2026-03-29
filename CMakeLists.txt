@@ -75,4 +75,4 @@ target_compile_options(ecdsa_tool PRIVATE -Wall -Wextra -pedantic -Werror --embe
 add_executable(tls_connect_tool tests/tls_connect_tool.cpp)
 target_link_libraries(tls_connect_tool PRIVATE asn1)
 target_include_directories(tls_connect_tool PRIVATE ${CMAKE_SOURCE_DIR})
-target_compile_options(tls_connect_tool PRIVATE -Wall -Wextra -pedantic -Werror --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
+target_compile_options(tls_connect_tool PRIVATE -Wall -Wextra -pedantic -Werror -O2 --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
