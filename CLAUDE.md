@@ -10,7 +10,11 @@ ctest --test-dir build
 
 Run a single test: `ctest --test-dir build -R test_name` (e.g., `test_lexer`, `test_ecdsa`).
 
-Compiler must support C++26. The build uses `-Wall -Wextra -pedantic -Werror` — all warnings are errors. The flag `-fconstexpr-ops-limit=1000000000` is set for deep compile-time evaluation. `--embed-dir` points to `definitions/` for `#embed` support.
+Full check (unit tests + OpenSSL interop + TLS integration): `cmake --build build --target check`
+
+Containerized full check (Debian sid): `./container-check.sh` (uses podman; `CONTAINER_CMD=docker ./container-check.sh` for docker).
+
+Compiler must support C++26. The build uses `-Wall -Wextra -pedantic -Werror` — all warnings are errors. The flag `-fconstexpr-ops-limit=1000000000` is set for deep compile-time evaluation. `--embed-dir` points to `definitions/` and `${CMAKE_BINARY_DIR}` for `#embed` support. The CA bundle is downloaded at configure time.
 
 ## Architecture
 

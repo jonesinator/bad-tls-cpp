@@ -306,13 +306,25 @@ The test suite is comprehensive:
 
 ## Build
 
-Requires CMake 3.30+, a C++26 compiler (tested with recent GCC), and internet access for the first configure (downloads Mozilla's CA bundle). The CA bundle is cached in the build directory and verified by SHA-256 hash.
+Requires CMake 3.30+, a C++26 compiler (tested with GCC 15 on Debian sid), and internet access for the first configure (downloads Mozilla's CA bundle) and for TLS integration tests. The CA bundle is cached in the build directory and verified by SHA-256 hash.
 
 ```bash
 cmake -B build -G Ninja    # downloads cacert.pem on first run
 cmake --build build
-ctest --test-dir build
+ctest --test-dir build      # unit tests only
+cmake --build build --target check  # full: unit + OpenSSL interop + TLS integration
 ```
+
+### Containerized Build
+
+A `Containerfile` (Debian sid) provides a reproducible build environment with all dependencies. No local toolchain required.
+
+```bash
+./container-check.sh                        # uses podman
+CONTAINER_CMD=docker ./container-check.sh   # uses docker
+```
+
+This builds from scratch inside the container and runs the full `check` target (25 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests).
 
 ## Design Philosophy
 
