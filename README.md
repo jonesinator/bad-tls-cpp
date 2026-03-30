@@ -45,7 +45,10 @@ bad-tls-cpp/
 │   │   ├── verify.hpp                # Chain verification, key extraction, sig verify
 │   │   ├── trust_store.hpp           # Trusted root certificate store
 │   │   ├── mozilla_roots.hpp         # Mozilla CA bundle (145 roots, embedded via #embed)
-│   │   └── hostname_verifier.hpp     # Hostname verification (RFC 6125/2818)
+│   │   ├── hostname_verifier.hpp     # Hostname verification (RFC 6125/2818)
+│   │   ├── time_verifier.hpp         # Certificate time validation (RFC 5280 §4.1.2.5)
+│   │   ├── key_usage_verifier.hpp    # KeyUsage extension enforcement (RFC 5280 §4.2.1.3)
+│   │   └── basic_constraints_verifier.hpp  # BasicConstraints enforcement (RFC 5280 §4.2.1.9)
 │   └── tls/                          # TLS 1.2 client + server (depends on crypto/ + x509/)
 │       ├── types.hpp                 # Wire enums, ProtocolVersion, CipherSuite, etc.
 │       ├── record.hpp                # TlsReader/TlsWriter, record framing
@@ -214,6 +217,18 @@ Embeds Mozilla's trusted root CA certificates (from curl.se's `cacert.pem`) via 
 
 A `certificate_verifier` that checks the server's certificate against an expected hostname per RFC 6125 / RFC 2818. Checks Subject Alternative Name (SAN) dNSName entries first; falls back to Common Name (CN) only if no SAN extension exists. Supports wildcard matching (`*.example.com` matches `foo.example.com` but not `foo.bar.example.com` or `example.com`). Only verifies the leaf certificate (depth == 0).
 
+### Time Verification (`x509/time_verifier.hpp`)
+
+A `certificate_verifier` that validates each certificate's `notBefore` and `notAfter` fields (RFC 5280 Section 4.1.2.5). Parses both UTCTime (`YYMMDDHHMMSSZ`) and GeneralizedTime (`YYYYMMDDHHMMSSZ`) formats. By default checks against `std::chrono::system_clock::now()`; accepts an optional `check_time` for testing against a specific time point.
+
+### Key Usage Verification (`x509/key_usage_verifier.hpp`)
+
+A `certificate_verifier` that enforces the KeyUsage extension (RFC 5280 Section 4.2.1.3). If the extension is absent, the certificate passes (the extension is optional). If present on a non-leaf certificate (depth > 0), the `keyCertSign` bit must be set.
+
+### Basic Constraints Verification (`x509/basic_constraints_verifier.hpp`)
+
+A `certificate_verifier` that enforces the BasicConstraints extension (RFC 5280 Section 4.2.1.9). Non-leaf certificates must have `cA=TRUE`. If `pathLenConstraint` is present, the number of intermediate CA certificates between this CA and the leaf must not exceed it. Leaf certificates are not required to have this extension.
+
 ## The TLS 1.2 Layer (`tls/`)
 
 The TLS module implements TLS 1.2 client and server (RFC 5246): types, binary serialization, key derivation, record-level encryption, transport abstraction, buffered record I/O, ECDHE key exchange, signature verification/generation, and complete handshake state machines with application data send/receive. It uses its own big-endian binary framing, not ASN.1 DER.
@@ -336,7 +351,7 @@ The test suite is comprehensive:
 | `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
 | `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
 | `test_x509.cpp` | X.509 certificate parsing, field extraction, RDN access, extension parsing |
-| `test_x509_verify.cpp` | Certificate chain verification, TBS extraction, key extraction, trust store |
+| `test_x509_verify.cpp` | Certificate chain verification, TBS extraction, key extraction, trust store, time/key-usage/basic-constraints verifiers |
 | `test_tls_types.cpp` | TLS wire enum values, ProtocolVersion, SessionId, SignatureAndHashAlgorithm |
 | `test_tls_record.cpp` | TlsReader/TlsWriter roundtrips, record framing, incomplete records, sub-readers |
 | `test_tls_handshake.cpp` | ClientHello serialization, ServerHello/Certificate/SKE parsing, Finished roundtrip |

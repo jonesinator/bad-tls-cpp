@@ -17,6 +17,9 @@
 #include <crypto/rsa.hpp>
 #include <crypto/random.hpp>
 #include <asn1/der/codegen.hpp>
+#include <x509/basic_constraints_verifier.hpp>
+#include <x509/key_usage_verifier.hpp>
+#include <x509/time_verifier.hpp>
 #include <x509/trust_store.hpp>
 #include <span>
 #include <vector>
@@ -492,7 +495,10 @@ private:
                     chain_der_vec.emplace_back(c.data.data(), c.data.data() + c.len);
                 }
                 try {
-                    if (!asn1::x509::verify_chain(chain_der_vec, *config_.client_ca))
+                    asn1::x509::time_verifier tv{};
+                    asn1::x509::key_usage_verifier kuv{};
+                    asn1::x509::basic_constraints_verifier bcv{};
+                    if (!asn1::x509::verify_chain(chain_der_vec, *config_.client_ca, tv, kuv, bcv))
                         return {tls_error::bad_certificate};
                 } catch (...) {
                     return {tls_error::bad_certificate};

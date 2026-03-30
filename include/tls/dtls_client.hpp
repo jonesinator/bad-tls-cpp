@@ -16,7 +16,10 @@
 #include <crypto/ecdsa.hpp>
 #include <crypto/random.hpp>
 #include <asn1/der/codegen.hpp>
+#include <x509/basic_constraints_verifier.hpp>
 #include <x509/hostname_verifier.hpp>
+#include <x509/key_usage_verifier.hpp>
+#include <x509/time_verifier.hpp>
 #include <x509/trust_store.hpp>
 #include <vector>
 
@@ -283,11 +286,14 @@ private:
             }
             try {
                 bool chain_ok = false;
+                asn1::x509::time_verifier tv{};
+                asn1::x509::key_usage_verifier kuv{};
+                asn1::x509::basic_constraints_verifier bcv{};
                 if (!config_.hostname.empty()) {
                     asn1::x509::hostname_verifier hv{config_.hostname};
-                    chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust, hv);
+                    chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust, hv, tv, kuv, bcv);
                 } else {
-                    chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust);
+                    chain_ok = asn1::x509::verify_chain(chain_der_vec, *config_.trust, tv, kuv, bcv);
                 }
                 if (!chain_ok) return {tls_error::bad_certificate};
             } catch (...) {

@@ -1,6 +1,11 @@
+#include <x509/basic_constraints_verifier.hpp>
+#include <x509/key_usage_verifier.hpp>
+#include <x509/time_verifier.hpp>
 #include <x509/trust_store.hpp>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <string_view>
 #include <vector>
 
@@ -256,6 +261,262 @@ void test_multiple_verifiers() {
     assert(verify_chain(chain, store, always_pass_verifier{}, depth_limit_verifier{0}));
 }
 
+// --- Time verifier tests ---
+
+// Helper: create a time_point from year/month/day
+std::chrono::system_clock::time_point make_time(int year, int month, int day) {
+    std::tm tm{};
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = 12;
+    tm.tm_isdst = 0;
+    return std::chrono::system_clock::from_time_t(timegm(&tm));
+}
+
+void test_time_verifier_valid() {
+    // Test certs are valid 2026-03-29 to 2027-03-29
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+
+    // Check at a time within validity range
+    time_verifier tv{make_time(2026, 6, 15)};
+    assert(verify_chain(chain, store, tv));
+}
+
+void test_time_verifier_expired() {
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+
+    // Check at a time after expiry
+    time_verifier tv{make_time(2028, 1, 1)};
+    assert(!verify_chain(chain, store, tv));
+}
+
+void test_time_verifier_not_yet_valid() {
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+
+    // Check at a time before notBefore
+    time_verifier tv{make_time(2025, 1, 1)};
+    assert(!verify_chain(chain, store, tv));
+}
+
+void test_time_verifier_system_time() {
+    // Certs valid until 2027-03-29, system time should be within range
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+
+    // Default: uses system_clock::now()
+    time_verifier tv{};
+    assert(verify_chain(chain, store, tv));
+}
+
+void test_time_parse_standalone() {
+    // Verify time parsing directly on a parsed certificate
+    auto cert = parse_certificate_pem(ca_pem);
+    auto& validity = cert.get<"tbsCertificate">().get<"validity">();
+
+    auto not_before = detail::parse_x509_time(validity.get<"notBefore">());
+    auto not_after  = detail::parse_x509_time(validity.get<"notAfter">());
+
+    // notAfter must be after notBefore
+    assert(not_after > not_before);
+
+    // Check that a known date falls between them
+    auto mid = make_time(2026, 6, 15);
+    assert(not_before <= mid && mid <= not_after);
+
+    // Check that a date before notBefore is outside
+    auto early = make_time(2020, 1, 1);
+    assert(early < not_before);
+}
+
+// --- Key usage verifier tests ---
+
+void test_key_usage_verifier_no_extension() {
+    // CA cert and leaf cert don't have KeyUsage extension
+    // Verifier should pass (extension absent = no restriction)
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+    key_usage_verifier kuv{};
+    assert(verify_chain(chain, store, kuv));
+}
+
+void test_key_usage_bit_testing() {
+    // Test the bit testing helper directly
+    der::BitString bs;
+    bs.bytes = {0x06};  // bits: 00000110 → bits 5 and 6 set (keyCertSign, cRLSign)
+    bs.unused_bits = 1;
+
+    assert(!detail::has_key_usage_bit(bs, key_usage_bit::digital_signature));  // bit 0
+    assert(!detail::has_key_usage_bit(bs, key_usage_bit::key_agreement));      // bit 4
+    assert(detail::has_key_usage_bit(bs, key_usage_bit::key_cert_sign));       // bit 5
+    assert(detail::has_key_usage_bit(bs, key_usage_bit::crl_sign));            // bit 6
+}
+
+void test_key_usage_verifier_direct() {
+    // Test verifier directly with a cert_context at different depths
+    auto ca_der_vec = pem_to_der(ca_pem);
+    auto ca_cert = parse_certificate(ca_der_vec);
+    auto tbs_der = extract_tbs_der(ca_der_vec);
+
+    cert_context ctx{
+        .cert = ca_cert,
+        .issuer = nullptr,
+        .cert_der = ca_der_vec,
+        .tbs_der = tbs_der,
+        .depth = 1,
+        .chain_length = 2
+    };
+
+    // CA cert has no KeyUsage extension → passes at any depth
+    key_usage_verifier kuv{};
+    assert(kuv.verify(ctx));
+}
+
+// --- Basic constraints verifier tests ---
+
+void test_basic_constraints_ca_at_depth() {
+    // CA cert has basicConstraints cA=TRUE
+    auto ca_der_vec = pem_to_der(ca_pem);
+    auto ca_cert = parse_certificate(ca_der_vec);
+    auto tbs_der = extract_tbs_der(ca_der_vec);
+
+    cert_context ctx{
+        .cert = ca_cert,
+        .issuer = nullptr,
+        .cert_der = ca_der_vec,
+        .tbs_der = tbs_der,
+        .depth = 1,
+        .chain_length = 2
+    };
+
+    basic_constraints_verifier bcv{};
+    assert(bcv.verify(ctx));
+}
+
+void test_basic_constraints_leaf_no_constraint() {
+    // Leaf cert has no basicConstraints — should pass at depth 0
+    auto leaf_der_vec = pem_to_der(leaf_pem);
+    auto leaf_cert = parse_certificate(leaf_der_vec);
+    auto tbs_der = extract_tbs_der(leaf_der_vec);
+
+    cert_context ctx{
+        .cert = leaf_cert,
+        .issuer = nullptr,
+        .cert_der = leaf_der_vec,
+        .tbs_der = tbs_der,
+        .depth = 0,
+        .chain_length = 2
+    };
+
+    basic_constraints_verifier bcv{};
+    assert(bcv.verify(ctx));
+}
+
+void test_basic_constraints_missing_on_intermediate() {
+    // Leaf cert does NOT have basicConstraints — should FAIL at depth > 0
+    auto leaf_der_vec = pem_to_der(leaf_pem);
+    auto leaf_cert = parse_certificate(leaf_der_vec);
+    auto tbs_der = extract_tbs_der(leaf_der_vec);
+
+    cert_context ctx{
+        .cert = leaf_cert,
+        .issuer = nullptr,
+        .cert_der = leaf_der_vec,
+        .tbs_der = tbs_der,
+        .depth = 1,  // pretend it's an intermediate
+        .chain_length = 3
+    };
+
+    basic_constraints_verifier bcv{};
+    assert(!bcv.verify(ctx));
+}
+
+void test_basic_constraints_parse() {
+    // Verify BasicConstraints parsing on the CA cert directly
+    auto ca_cert = parse_certificate_pem(ca_pem);
+    auto bc = detail::parse_basic_constraints(ca_cert);
+    assert(bc.has_value());
+    assert(bc->ca == true);
+    // Our test CA cert doesn't have pathLenConstraint
+    assert(!bc->path_len_constraint.has_value());
+}
+
+void test_basic_constraints_chain() {
+    // Full chain verification with basic_constraints_verifier
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+    basic_constraints_verifier bcv{};
+    assert(verify_chain(chain, store, bcv));
+}
+
+// --- Integration: all verifiers together ---
+
+void test_all_verifiers_together() {
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+
+    time_verifier tv{make_time(2026, 6, 15)};
+    key_usage_verifier kuv{};
+    basic_constraints_verifier bcv{};
+
+    assert(verify_chain(chain, store, tv, kuv, bcv));
+}
+
+void test_all_verifiers_expired_fails() {
+    auto leaf_der = pem_to_der(leaf_pem);
+    auto ca_der = pem_to_der(ca_pem);
+
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der, ca_der};
+
+    // Expired time should cause failure even with other verifiers passing
+    time_verifier tv{make_time(2028, 1, 1)};
+    key_usage_verifier kuv{};
+    basic_constraints_verifier bcv{};
+
+    assert(!verify_chain(chain, store, tv, kuv, bcv));
+}
+
 int main() {
     test_extract_tbs_der();
     test_extract_rsa_public_key();
@@ -270,5 +531,29 @@ int main() {
     test_chain_untrusted_root_rejected();
     test_custom_verifier();
     test_multiple_verifiers();
+
+    // Time verifier
+    test_time_verifier_valid();
+    test_time_verifier_expired();
+    test_time_verifier_not_yet_valid();
+    test_time_verifier_system_time();
+    test_time_parse_standalone();
+
+    // Key usage verifier
+    test_key_usage_verifier_no_extension();
+    test_key_usage_bit_testing();
+    test_key_usage_verifier_direct();
+
+    // Basic constraints verifier
+    test_basic_constraints_ca_at_depth();
+    test_basic_constraints_leaf_no_constraint();
+    test_basic_constraints_missing_on_intermediate();
+    test_basic_constraints_parse();
+    test_basic_constraints_chain();
+
+    // Integration
+    test_all_verifiers_together();
+    test_all_verifiers_expired_fails();
+
     return 0;
 }
