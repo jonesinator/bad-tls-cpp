@@ -1,4 +1,5 @@
 #include <tls/handshake.hpp>
+#include <tls/session_cache.hpp>
 #include <cassert>
 
 void test_client_hello_serialize() {
@@ -257,6 +258,106 @@ void test_alpn_extension_omitted_when_empty() {
     static_assert(test());
 }
 
+void test_session_cache_store_and_find() {
+    tls::session_cache cache(4);
+
+    tls::session_data sd;
+    for (uint8_t i = 0; i < 32; ++i) sd.session_id.data[i] = i;
+    sd.session_id.length = 32;
+    sd.cipher_suite = tls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
+    for (uint8_t i = 0; i < 48; ++i) sd.master_secret[i] = i;
+    sd.negotiated_protocol = "h2";
+
+    cache.store(sd);
+    assert(cache.size() == 1);
+
+    auto* found = cache.find(sd.session_id);
+    assert(found != nullptr);
+    assert(found->cipher_suite == sd.cipher_suite);
+    assert(found->master_secret == sd.master_secret);
+    assert(found->negotiated_protocol == "h2");
+}
+
+void test_session_cache_find_unknown() {
+    tls::session_cache cache;
+
+    tls::SessionId unknown_id;
+    for (uint8_t i = 0; i < 32; ++i) unknown_id.data[i] = 0xFF;
+    unknown_id.length = 32;
+
+    assert(cache.find(unknown_id) == nullptr);
+}
+
+void test_session_cache_remove() {
+    tls::session_cache cache;
+
+    tls::session_data sd;
+    for (uint8_t i = 0; i < 32; ++i) sd.session_id.data[i] = i;
+    sd.session_id.length = 32;
+    sd.cipher_suite = tls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
+
+    cache.store(sd);
+    assert(cache.size() == 1);
+
+    cache.remove(sd.session_id);
+    assert(cache.size() == 0);
+    assert(cache.find(sd.session_id) == nullptr);
+}
+
+void test_session_cache_eviction() {
+    tls::session_cache cache(2);
+
+    // Store 3 sessions in a cache of size 2 — oldest should be evicted
+    for (uint8_t k = 0; k < 3; ++k) {
+        tls::session_data sd;
+        for (uint8_t i = 0; i < 32; ++i) sd.session_id.data[i] = k;
+        sd.session_id.length = 32;
+        sd.cipher_suite = tls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
+        cache.store(sd);
+    }
+
+    assert(cache.size() == 2);
+
+    // First session (k=0) should have been evicted
+    tls::SessionId id0;
+    for (uint8_t i = 0; i < 32; ++i) id0.data[i] = 0;
+    id0.length = 32;
+    assert(cache.find(id0) == nullptr);
+
+    // Sessions k=1 and k=2 should still be present
+    tls::SessionId id1;
+    for (uint8_t i = 0; i < 32; ++i) id1.data[i] = 1;
+    id1.length = 32;
+    assert(cache.find(id1) != nullptr);
+
+    tls::SessionId id2;
+    for (uint8_t i = 0; i < 32; ++i) id2.data[i] = 2;
+    id2.length = 32;
+    assert(cache.find(id2) != nullptr);
+}
+
+void test_session_cache_replace_existing() {
+    tls::session_cache cache;
+
+    tls::session_data sd;
+    for (uint8_t i = 0; i < 32; ++i) sd.session_id.data[i] = 0xAA;
+    sd.session_id.length = 32;
+    sd.cipher_suite = tls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256;
+    sd.negotiated_protocol = "h2";
+
+    cache.store(sd);
+    assert(cache.size() == 1);
+
+    // Store again with different data — should replace, not add
+    sd.negotiated_protocol = "http/1.1";
+    cache.store(sd);
+    assert(cache.size() == 1);
+
+    auto* found = cache.find(sd.session_id);
+    assert(found != nullptr);
+    assert(found->negotiated_protocol == "http/1.1");
+}
+
 int main() {
     test_client_hello_serialize();
     test_server_hello_parse();
@@ -266,5 +367,10 @@ int main() {
     test_client_key_exchange_ecdhe();
     test_alpn_extension();
     test_alpn_extension_omitted_when_empty();
+    test_session_cache_store_and_find();
+    test_session_cache_find_unknown();
+    test_session_cache_remove();
+    test_session_cache_eviction();
+    test_session_cache_replace_existing();
     return 0;
 }

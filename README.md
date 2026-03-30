@@ -59,6 +59,7 @@ bad-tls-cpp/
 │       ├── transcript.hpp            # Handshake transcript hash accumulator
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
+│       ├── session_cache.hpp          # Session ID cache for resumption (RFC 5246)
 │       ├── client.hpp                # tls_client handshake state machine
 │       ├── server.hpp                # tls_server handshake state machine
 │       ├── private_key.hpp           # EC and RSA private key loading from PEM
@@ -277,11 +278,11 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 ### TLS Client (`tls/client.hpp`)
 
-`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, an optional `hostname` for SAN/CN verification, optional client certificate + private key for mutual TLS (mTLS), and optional ALPN protocol names (RFC 7301) for application-layer protocol negotiation. Supports both EC and RSA client certificates: when the server requests client authentication, the client sends its certificate chain and a CertificateVerify message signed with ECDSA or RSA PKCS#1 v1.5 depending on the key type. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
+`tls_client<Transport, RNG>` performs a full TLS 1.2 ECDHE handshake and provides encrypted application data send/receive. `client_config` specifies cipher suites, curves, signature algorithms, an optional `trust_store` for certificate chain verification, an optional `hostname` for SAN/CN verification, optional client certificate + private key for mutual TLS (mTLS), optional ALPN protocol names (RFC 7301) for application-layer protocol negotiation, and optional session resumption via `session_store` (cache for storing sessions after full handshakes) and `resume_session` (session to attempt resuming). When the server echoes the session ID, an abbreviated handshake is performed: the master secret is reused from the cached session, a fresh key block is derived with new randoms, and only CCS+Finished messages are exchanged (server first, then client). Supports both EC and RSA client certificates: when the server requests client authentication, the client sends its certificate chain and a CertificateVerify message signed with ECDSA or RSA PKCS#1 v1.5 depending on the key type. The handshake uses a two-phase design: Phase 1 (ClientHello/ServerHello) runs before the cipher suite is known, buffering transcript bytes. Phase 2 dispatches via `dispatch_cipher_suite` into a fully-templated continuation where the hash and cipher types are compile-time. Methods: `handshake()`, `send()`, `recv()`, `close()`.
 
 ### TLS Server (`tls/server.hpp`)
 
-`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), private key (EC or RSA), cipher suites to offer, optional mTLS settings (`client_ca` trust store and `require_client_cert` flag), and optional ALPN protocol names (RFC 7301) for application-layer protocol negotiation. Supports both ECDSA and RSA server certificates: the server auto-selects cipher suites matching its key type. When `client_ca` is set, the server sends a CertificateRequest advertising both RSA and ECDSA client certificate types, verifies the client's certificate chain, and validates the CertificateVerify signature (ECDSA or RSA PKCS#1 v1.5). `client_authenticated()` reports whether the client presented a valid certificate. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`.
+`tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), private key (EC or RSA), cipher suites to offer, optional mTLS settings (`client_ca` trust store and `require_client_cert` flag), optional ALPN protocol names (RFC 7301) for application-layer protocol negotiation, and an optional `session_store` for session ID-based resumption (RFC 5246 Section 7.4.1.2). When a session cache is configured, the server generates a 32-byte random session ID on full handshakes and stores the session data (master secret, cipher suite, ALPN) for future resumption. On subsequent connections, if the client presents a known session ID and still offers the cached cipher suite, the server performs an abbreviated handshake: ServerHello (echoing the session ID) → CCS → Finished, then receives client CCS → Finished. Supports both ECDSA and RSA server certificates: the server auto-selects cipher suites matching its key type. When `client_ca` is set, the server sends a CertificateRequest advertising both RSA and ECDSA client certificate types, verifies the client's certificate chain, and validates the CertificateVerify signature (ECDSA or RSA PKCS#1 v1.5). `client_authenticated()` reports whether the client presented a valid certificate. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`.
 
 ### Private Key Loading (`tls/private_key.hpp`)
 
@@ -317,11 +318,11 @@ DTLS-specific messages: `HelloVerifyRequest` (cookie exchange for DoS protection
 
 ### DTLS Client (`tls/dtls_client.hpp`)
 
-`dtls_client<Transport, RNG>` performs a full DTLS 1.2 ECDHE handshake with cookie exchange: sends initial ClientHello, handles HelloVerifyRequest, re-sends ClientHello with cookie, then proceeds through the standard TLS 1.2 message flow. Supports certificate verification, hostname verification, mutual DTLS with EC and RSA client certificates, and ALPN (RFC 7301). Same four cipher suites as TLS.
+`dtls_client<Transport, RNG>` performs a full DTLS 1.2 ECDHE handshake with cookie exchange: sends initial ClientHello, handles HelloVerifyRequest, re-sends ClientHello with cookie, then proceeds through the standard TLS 1.2 message flow. Supports certificate verification, hostname verification, mutual DTLS with EC and RSA client certificates, ALPN (RFC 7301), and session ID-based resumption (RFC 5246 Section 7.4.1.2). Same four cipher suites as TLS.
 
 ### DTLS Server (`tls/dtls_server.hpp`)
 
-`dtls_server<Transport, RNG>` performs the server side of a DTLS 1.2 ECDHE handshake. Sends HelloVerifyRequest with an HMAC-SHA256 cookie for DoS protection, validates the cookie on the second ClientHello, then proceeds through the standard server handshake. Supports both ECDSA and RSA server keys, mutual DTLS with EC and RSA client certificates, and ALPN (RFC 7301).
+`dtls_server<Transport, RNG>` performs the server side of a DTLS 1.2 ECDHE handshake. Sends HelloVerifyRequest with an HMAC-SHA256 cookie for DoS protection, validates the cookie on the second ClientHello, then proceeds through the standard server handshake. Supports both ECDSA and RSA server keys, mutual DTLS with EC and RSA client certificates, ALPN (RFC 7301), and session ID-based resumption (RFC 5246 Section 7.4.1.2).
 
 ## ASN.1 Definitions
 
@@ -356,7 +357,7 @@ The test suite is comprehensive:
 | `test_x509_verify.cpp` | Certificate chain verification, TBS extraction, key extraction, trust store, time/key-usage/basic-constraints verifiers |
 | `test_tls_types.cpp` | TLS wire enum values, ProtocolVersion, SessionId, SignatureAndHashAlgorithm |
 | `test_tls_record.cpp` | TlsReader/TlsWriter roundtrips, record framing, incomplete records, sub-readers |
-| `test_tls_handshake.cpp` | ClientHello serialization, ServerHello/Certificate/SKE parsing, Finished roundtrip |
+| `test_tls_handshake.cpp` | ClientHello serialization, ServerHello/Certificate/SKE parsing, Finished roundtrip, session cache store/find/remove/eviction |
 | `test_tls_key_schedule.cpp` | Master secret derivation, key block expansion, verify_data, transcript hash |
 | `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
 | `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |

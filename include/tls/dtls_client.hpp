@@ -13,6 +13,7 @@
 #include "dtls_connection.hpp"
 #include "dtls_handshake.hpp"
 #include "private_key.hpp"
+#include "session_cache.hpp"
 #include <crypto/ecdsa.hpp>
 #include <crypto/random.hpp>
 #include <asn1/der/codegen.hpp>
@@ -55,6 +56,10 @@ struct dtls_client_config {
 
     // ALPN protocol names (empty = don't send ALPN extension) — RFC 7301
     std::span<const std::string_view> alpn_protocols;
+
+    // Session resumption — RFC 5246 Section 7.4.1.2
+    session_cache* session_store = nullptr;         // store sessions after full handshake
+    const session_data* resume_session = nullptr;   // session to attempt resuming
 };
 
 template <transport Transport, random_generator RNG>
@@ -69,6 +74,7 @@ class dtls_client {
     std::array<uint8_t, 48> master_secret_{};
     bool handshake_complete_ = false;
     std::string negotiated_protocol_;
+    SessionId server_hello_session_id_{};
     uint16_t next_send_seq_ = 0;  // outgoing handshake message_seq
 
 public:
@@ -90,7 +96,10 @@ public:
         DtlsClientHello ch{};
         ch.client_version = DTLS_1_2;
         ch.random = client_random_;
-        ch.session_id.length = 0;
+        if (config_.resume_session && config_.resume_session->session_id.length > 0)
+            ch.session_id = config_.resume_session->session_id;
+        else
+            ch.session_id.length = 0;
         for (size_t i = 0; i < config_.num_cipher_suites; ++i)
             ch.cipher_suites.push_back(config_.cipher_suites[i]);
         ch.compression_methods.push_back(CompressionMethod::null);
@@ -144,6 +153,7 @@ public:
             auto server_hello = read_server_hello(sh_r);
             server_random_ = server_hello.random;
             negotiated_suite_ = server_hello.cipher_suite;
+            server_hello_session_id_ = server_hello.session_id;
 
             bool use_ems = false;
             if (server_hello.extensions.size() > 0) {
@@ -171,6 +181,11 @@ public:
                     if (ext_len > 0) ext_r.read_bytes(ext_len);
                 }
             }
+
+            // Detect abbreviated handshake: server echoed our session_id
+            bool resuming = config_.resume_session &&
+                server_hello.session_id.length > 0 &&
+                server_hello.session_id == config_.resume_session->session_id;
 
             // Build early transcript with full DTLS handshake messages (12-byte header + body)
             return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
@@ -183,6 +198,8 @@ public:
                 // Add ServerHello to transcript — full DTLS handshake message
                 transcript.update(std::span<const uint8_t>(sh_raw));
 
+                if (resuming)
+                    return handshake_abbreviated<Traits>(transcript, *config_.resume_session);
                 return handshake_continue<Traits>(transcript, hs_reader, use_ems);
             });
         } else if (first_hdr.type == HandshakeType::server_hello) {
@@ -191,6 +208,7 @@ public:
             auto server_hello = read_server_hello(sh_r);
             server_random_ = server_hello.random;
             negotiated_suite_ = server_hello.cipher_suite;
+            server_hello_session_id_ = server_hello.session_id;
 
             bool use_ems = false;
             if (server_hello.extensions.size() > 0) {
@@ -219,6 +237,11 @@ public:
                 }
             }
 
+            // Detect abbreviated handshake: server echoed our session_id
+            bool resuming = config_.resume_session &&
+                server_hello.session_id.length > 0 &&
+                server_hello.session_id == config_.resume_session->session_id;
+
             return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
                 using Hash = typename Traits::hash_type;
                 TranscriptHash<Hash> transcript;
@@ -229,6 +252,8 @@ public:
                 // Add ServerHello to transcript — full DTLS handshake message
                 transcript.update(std::span<const uint8_t>(first_raw));
 
+                if (resuming)
+                    return handshake_abbreviated<Traits>(transcript, *config_.resume_session);
                 return handshake_continue<Traits>(transcript, hs_reader, use_ems);
             });
         } else {
@@ -522,6 +547,97 @@ private:
 
         if (server_fin.verify_data != expected_vd)
             return {tls_error::handshake_failure};
+
+        // Store session for future resumption
+        if (config_.session_store && server_hello_session_id_.length > 0) {
+            session_data sd;
+            sd.session_id = server_hello_session_id_;
+            sd.cipher_suite = negotiated_suite_;
+            sd.master_secret = master_secret_;
+            sd.use_extended_master_secret = use_ems;
+            sd.negotiated_protocol = negotiated_protocol_;
+            config_.session_store->store(sd);
+        }
+
+        handshake_complete_ = true;
+        return {tls_error::ok};
+    }
+
+    // Abbreviated handshake for session resumption (RFC 5246 Section 7.4.1.2)
+    // Server sends CCS+Finished first, then client sends CCS+Finished
+    template <typename Traits>
+    tls_result<void> handshake_abbreviated(
+        TranscriptHash<typename Traits::hash_type>& transcript,
+        const session_data& cached)
+    {
+        using Hash = typename Traits::hash_type;
+
+        // Verify cipher suite matches cached session
+        if (cached.cipher_suite != negotiated_suite_)
+            return {tls_error::handshake_failure};
+
+        // Reuse master secret from cached session
+        master_secret_ = cached.master_secret;
+
+        // Derive fresh key block with new randoms
+        auto params = get_cipher_suite_params(negotiated_suite_);
+        auto kb = derive_key_block<Hash>(master_secret_, client_random_, server_random_, params);
+
+        // --- Receive server ChangeCipherSpec ---
+        // Skip retransmitted server flight records (epoch 0 handshake)
+        while (true) {
+            auto server_ccs = rio_.recv_record();
+            if (!server_ccs) return {server_ccs.error};
+            if (server_ccs.value.type == ContentType::change_cipher_spec) break;
+            if (server_ccs.value.type == ContentType::handshake &&
+                server_ccs.value.epoch == 0) continue;
+            return {tls_error::unexpected_message};
+        }
+
+        rio_.activate_read_cipher(kb, negotiated_suite_);
+
+        // --- Receive server Finished (encrypted) ---
+        auto expected_server_vd = compute_verify_data<Hash>(
+            master_secret_, false, transcript.current_hash());
+
+        auto sfin_rec = rio_.recv_record();
+        if (!sfin_rec) return {sfin_rec.error};
+        if (sfin_rec.value.type != ContentType::handshake)
+            return {tls_error::unexpected_message};
+
+        TlsReader sfin_r(std::span<const uint8_t>(
+            sfin_rec.value.fragment.data.data(), sfin_rec.value.fragment.size()));
+        auto sfin_hdr = read_dtls_handshake_header(sfin_r);
+        if (sfin_hdr.type != HandshakeType::finished)
+            return {tls_error::unexpected_message};
+        auto server_fin = read_finished(sfin_r);
+
+        if (server_fin.verify_data != expected_server_vd)
+            return {tls_error::handshake_failure};
+
+        // Add server Finished to transcript for client Finished computation
+        transcript.update(std::span<const uint8_t>(
+            sfin_rec.value.fragment.data.data(), sfin_rec.value.fragment.size()));
+
+        // --- Send client ChangeCipherSpec ---
+        std::array<uint8_t, 1> ccs = {CHANGE_CIPHER_SPEC_MESSAGE};
+        auto ccs_err = rio_.send_record(ContentType::change_cipher_spec, ccs);
+        if (!ccs_err) return {ccs_err.error};
+
+        rio_.activate_write_cipher(kb, negotiated_suite_);
+
+        // --- Send client Finished (encrypted) ---
+        auto client_vd = compute_verify_data<Hash>(
+            master_secret_, true, transcript.current_hash());
+        Finished client_fin{};
+        client_fin.verify_data = client_vd;
+        TlsWriter<64> fin_w;
+        write_dtls_finished(fin_w, next_send_seq_++, client_fin);
+        auto fin_err = rio_.send_record(ContentType::handshake, fin_w.data());
+        if (!fin_err) return {fin_err.error};
+
+        // Restore ALPN from cached session
+        negotiated_protocol_ = cached.negotiated_protocol;
 
         handshake_complete_ = true;
         return {tls_error::ok};
