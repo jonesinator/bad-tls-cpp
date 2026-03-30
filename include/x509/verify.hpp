@@ -319,6 +319,20 @@ bool verify_chain(
         // Check if this cert's issuer is a root in the trust store
         auto root = roots.find_issuer(certs[current]);
         if (root) {
+            // Run verifiers on the root CA itself
+            if constexpr (sizeof...(Vs) > 0) {
+                auto root_tbs_der = extract_tbs_der(root->cert_der);
+                cert_context root_ctx{
+                    .cert = root->cert,
+                    .issuer = nullptr,
+                    .cert_der = root->cert_der,
+                    .tbs_der = root_tbs_der,
+                    .depth = depth + 1,
+                    .chain_length = chain_der.size()
+                };
+                if (!(verifiers.verify(root_ctx) && ...))
+                    return false;
+            }
             auto root_key = extract_public_key(root->cert);
             return verify_certificate_signature(
                 chain_der[current], certs[current], root_key);

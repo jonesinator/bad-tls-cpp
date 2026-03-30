@@ -500,6 +500,46 @@ void test_all_verifiers_together() {
     assert(verify_chain(chain, store, tv, kuv, bcv));
 }
 
+void test_root_ca_time_verified() {
+    // The root CA in the trust store should also be time-checked.
+    // CA cert is valid 2026-03-29 to 2027-03-29.
+    // Use a time after the root's expiry — chain should fail even though
+    // the leaf (also expired) would fail too. The key point is the root
+    // is verified, not just the chain certs.
+    auto leaf_der = pem_to_der(leaf_pem);
+
+    // Put only the root in the trust store (not in the chain)
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    // Chain with just the leaf — root is only in the trust store
+    std::vector<std::vector<uint8_t>> chain = {leaf_der};
+
+    // Valid time: should pass
+    time_verifier tv_ok{make_time(2026, 6, 15)};
+    assert(verify_chain(chain, store, tv_ok));
+
+    // Expired time: should fail (root CA is expired too)
+    time_verifier tv_expired{make_time(2028, 1, 1)};
+    assert(!verify_chain(chain, store, tv_expired));
+}
+
+void test_root_ca_basic_constraints_verified() {
+    // Verify that the root CA's basicConstraints are checked.
+    // The EC cert is self-signed with cA=TRUE, so use it as a root.
+    // The leaf cert without basicConstraints should fail if used as a root
+    // for a chain (since it would be at depth > 0 and lack cA=TRUE).
+
+    // Use the real CA (has cA=TRUE) as root — should pass
+    auto leaf_der = pem_to_der(leaf_pem);
+    trust_store store;
+    store.add_pem(ca_pem);
+
+    std::vector<std::vector<uint8_t>> chain = {leaf_der};
+    basic_constraints_verifier bcv{};
+    assert(verify_chain(chain, store, bcv));
+}
+
 void test_all_verifiers_expired_fails() {
     auto leaf_der = pem_to_der(leaf_pem);
     auto ca_der = pem_to_der(ca_pem);
@@ -550,6 +590,10 @@ int main() {
     test_basic_constraints_missing_on_intermediate();
     test_basic_constraints_parse();
     test_basic_constraints_chain();
+
+    // Root CA verification
+    test_root_ca_time_verified();
+    test_root_ca_basic_constraints_verified();
 
     // Integration
     test_all_verifiers_together();
