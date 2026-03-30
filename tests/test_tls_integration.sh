@@ -179,6 +179,7 @@ echo ""
 echo "--- Bad certificates (should reject) ---"
 expect_fail wrong.host.badssl.com "hostname mismatch"
 expect_fail untrusted-root.badssl.com "untrusted root CA"
+expect_fail expired.badssl.com "expired certificate"
 
 echo ""
 echo "--- mTLS with client certificate (client.badssl.com) ---"
