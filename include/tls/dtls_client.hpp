@@ -99,6 +99,8 @@ public:
         auto first_msg = hs_reader.next_message_no_transcript();
         if (!first_msg) return {first_msg.error};
         auto [first_hdr, first_body] = first_msg.value;
+        // Raw DTLS message (12-byte header + body) from reassembly buffer
+        auto first_raw = std::vector<uint8_t>(hs_reader.reasm_buf);
 
         if (first_hdr.type == HandshakeType::hello_verify_request) {
             // Parse HelloVerifyRequest
@@ -125,6 +127,8 @@ public:
             auto sh_msg = hs_reader.next_message_no_transcript();
             if (!sh_msg) return {sh_msg.error};
             auto [sh_hdr, sh_body] = sh_msg.value;
+            // Raw ServerHello DTLS message from reassembly buffer
+            auto sh_raw = std::vector<uint8_t>(hs_reader.reasm_buf);
             if (sh_hdr.type != HandshakeType::server_hello)
                 return {tls_error::unexpected_message};
 
@@ -146,36 +150,16 @@ public:
                 }
             }
 
-            // Build early transcript: TLS-format ClientHello + ServerHello
-            // Extract TLS-style handshake body from DTLS ClientHello
-            // DTLS handshake header is 12 bytes; TLS is 4. We need type(1)+length(3)+body.
+            // Build early transcript with full DTLS handshake messages (12-byte header + body)
             return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
                 using Hash = typename Traits::hash_type;
                 TranscriptHash<Hash> transcript;
 
-                // Add ClientHello to transcript (TLS format: 4-byte header + body)
-                // From the DTLS writer: skip 12-byte DTLS header, get body
-                auto ch2_span = std::span<const uint8_t>(ch2_bytes.data(), ch2_bytes.size());
-                // Parse DTLS header to get body
-                TlsReader ch2_r(ch2_span);
-                auto ch2_hdr = read_dtls_handshake_header(ch2_r);
-                auto ch2_body = ch2_r.read_bytes(ch2_hdr.fragment_length);
-                std::array<uint8_t, 4> tls_ch_hdr{};
-                tls_ch_hdr[0] = static_cast<uint8_t>(HandshakeType::client_hello);
-                tls_ch_hdr[1] = static_cast<uint8_t>((ch2_hdr.length >> 16) & 0xFF);
-                tls_ch_hdr[2] = static_cast<uint8_t>((ch2_hdr.length >> 8) & 0xFF);
-                tls_ch_hdr[3] = static_cast<uint8_t>(ch2_hdr.length & 0xFF);
-                transcript.update(std::span<const uint8_t>(tls_ch_hdr));
-                transcript.update(ch2_body);
+                // Add ClientHello to transcript — full DTLS handshake message
+                transcript.update(std::span<const uint8_t>(ch2_bytes.data(), ch2_bytes.size()));
 
-                // Add ServerHello to transcript
-                std::array<uint8_t, 4> tls_sh_hdr{};
-                tls_sh_hdr[0] = static_cast<uint8_t>(HandshakeType::server_hello);
-                tls_sh_hdr[1] = static_cast<uint8_t>((sh_hdr.length >> 16) & 0xFF);
-                tls_sh_hdr[2] = static_cast<uint8_t>((sh_hdr.length >> 8) & 0xFF);
-                tls_sh_hdr[3] = static_cast<uint8_t>(sh_hdr.length & 0xFF);
-                transcript.update(std::span<const uint8_t>(tls_sh_hdr));
-                transcript.update(sh_body);
+                // Add ServerHello to transcript — full DTLS handshake message
+                transcript.update(std::span<const uint8_t>(sh_raw));
 
                 return handshake_continue<Traits>(transcript, hs_reader, use_ems);
             });
@@ -203,27 +187,11 @@ public:
                 using Hash = typename Traits::hash_type;
                 TranscriptHash<Hash> transcript;
 
-                // Add ClientHello to transcript
-                auto ch_span = std::span<const uint8_t>(ch_w.data().data(), ch_w.size());
-                TlsReader ch_r2(ch_span);
-                auto ch_hdr2 = read_dtls_handshake_header(ch_r2);
-                auto ch_body2 = ch_r2.read_bytes(ch_hdr2.fragment_length);
-                std::array<uint8_t, 4> tls_ch_hdr{};
-                tls_ch_hdr[0] = static_cast<uint8_t>(HandshakeType::client_hello);
-                tls_ch_hdr[1] = static_cast<uint8_t>((ch_hdr2.length >> 16) & 0xFF);
-                tls_ch_hdr[2] = static_cast<uint8_t>((ch_hdr2.length >> 8) & 0xFF);
-                tls_ch_hdr[3] = static_cast<uint8_t>(ch_hdr2.length & 0xFF);
-                transcript.update(std::span<const uint8_t>(tls_ch_hdr));
-                transcript.update(ch_body2);
+                // Add ClientHello to transcript — full DTLS handshake message
+                transcript.update(ch_w.data());
 
-                // Add ServerHello to transcript
-                std::array<uint8_t, 4> tls_sh_hdr{};
-                tls_sh_hdr[0] = static_cast<uint8_t>(HandshakeType::server_hello);
-                tls_sh_hdr[1] = static_cast<uint8_t>((first_hdr.length >> 16) & 0xFF);
-                tls_sh_hdr[2] = static_cast<uint8_t>((first_hdr.length >> 8) & 0xFF);
-                tls_sh_hdr[3] = static_cast<uint8_t>(first_hdr.length & 0xFF);
-                transcript.update(std::span<const uint8_t>(tls_sh_hdr));
-                transcript.update(first_body);
+                // Add ServerHello to transcript — full DTLS handshake message
+                transcript.update(std::span<const uint8_t>(first_raw));
 
                 return handshake_continue<Traits>(transcript, hs_reader, use_ems);
             });
@@ -376,20 +344,8 @@ private:
             }
             TlsWriter<32768> ccert_w;
             write_dtls_certificate(ccert_w, next_send_seq_++, client_cert_msg);
-            // Add to transcript as TLS format
-            {
-                auto ccert_span = ccert_w.data();
-                TlsReader ccert_r2(ccert_span);
-                auto ccert_hdr = read_dtls_handshake_header(ccert_r2);
-                auto ccert_body = ccert_r2.read_bytes(ccert_hdr.fragment_length);
-                std::array<uint8_t, 4> tls_hdr{};
-                tls_hdr[0] = static_cast<uint8_t>(HandshakeType::certificate);
-                tls_hdr[1] = static_cast<uint8_t>((ccert_hdr.length >> 16) & 0xFF);
-                tls_hdr[2] = static_cast<uint8_t>((ccert_hdr.length >> 8) & 0xFF);
-                tls_hdr[3] = static_cast<uint8_t>(ccert_hdr.length & 0xFF);
-                transcript.update(std::span<const uint8_t>(tls_hdr));
-                transcript.update(ccert_body);
-            }
+            // Add to transcript — full DTLS handshake message
+            transcript.update(ccert_w.data());
             auto ccert_err = rio_.send_record(ContentType::handshake, ccert_w.data());
             if (!ccert_err) return {ccert_err.error};
         }
@@ -404,20 +360,8 @@ private:
         // --- Send ClientKeyExchange ---
         TlsWriter<256> cke_w;
         write_dtls_client_key_exchange(cke_w, next_send_seq_++, ecdh_res.value.cke);
-        // Transcript
-        {
-            auto cke_span = cke_w.data();
-            TlsReader cke_r2(cke_span);
-            auto cke_hdr = read_dtls_handshake_header(cke_r2);
-            auto cke_body = cke_r2.read_bytes(cke_hdr.fragment_length);
-            std::array<uint8_t, 4> tls_hdr{};
-            tls_hdr[0] = static_cast<uint8_t>(HandshakeType::client_key_exchange);
-            tls_hdr[1] = static_cast<uint8_t>((cke_hdr.length >> 16) & 0xFF);
-            tls_hdr[2] = static_cast<uint8_t>((cke_hdr.length >> 8) & 0xFF);
-            tls_hdr[3] = static_cast<uint8_t>(cke_hdr.length & 0xFF);
-            transcript.update(std::span<const uint8_t>(tls_hdr));
-            transcript.update(cke_body);
-        }
+        // Add to transcript — full DTLS handshake message
+        transcript.update(cke_w.data());
         auto cke_err = rio_.send_record(ContentType::handshake, cke_w.data());
         if (!cke_err) return {cke_err.error};
 
@@ -469,19 +413,8 @@ private:
 
             TlsWriter<1024> cv_w;
             write_dtls_certificate_verify(cv_w, next_send_seq_++, cv);
-            {
-                auto cv_span = cv_w.data();
-                TlsReader cv_r2(cv_span);
-                auto cv_hdr = read_dtls_handshake_header(cv_r2);
-                auto cv_body = cv_r2.read_bytes(cv_hdr.fragment_length);
-                std::array<uint8_t, 4> tls_hdr{};
-                tls_hdr[0] = static_cast<uint8_t>(HandshakeType::certificate_verify);
-                tls_hdr[1] = static_cast<uint8_t>((cv_hdr.length >> 16) & 0xFF);
-                tls_hdr[2] = static_cast<uint8_t>((cv_hdr.length >> 8) & 0xFF);
-                tls_hdr[3] = static_cast<uint8_t>(cv_hdr.length & 0xFF);
-                transcript.update(std::span<const uint8_t>(tls_hdr));
-                transcript.update(cv_body);
-            }
+            // Add to transcript — full DTLS handshake message
+            transcript.update(cv_w.data());
             auto cv_err = rio_.send_record(ContentType::handshake, cv_w.data());
             if (!cv_err) return {cv_err.error};
         }
@@ -513,16 +446,8 @@ private:
         client_fin.verify_data = client_vd;
         TlsWriter<64> fin_w;
         write_dtls_finished(fin_w, next_send_seq_++, client_fin);
-        // Add to transcript (TLS format)
-        {
-            std::array<uint8_t, 4> tls_hdr{};
-            tls_hdr[0] = static_cast<uint8_t>(HandshakeType::finished);
-            tls_hdr[1] = 0;
-            tls_hdr[2] = 0;
-            tls_hdr[3] = 12;
-            transcript.update(std::span<const uint8_t>(tls_hdr));
-            transcript.update(std::span<const uint8_t>(client_fin.verify_data));
-        }
+        // Add to transcript — full DTLS handshake message
+        transcript.update(fin_w.data());
         auto fin_err = rio_.send_record(ContentType::handshake, fin_w.data());
         if (!fin_err) return {fin_err.error};
 

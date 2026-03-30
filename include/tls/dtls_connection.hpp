@@ -223,12 +223,15 @@ struct dtls_record_io {
 template <transport Transport>
 struct dtls_handshake_reader {
     dtls_record_io<Transport>& rio;
-    std::vector<uint8_t> buf;  // accumulated handshake bytes from current record
+    std::vector<uint8_t> buf;  // accumulated handshake bytes from records
     size_t pos = 0;
+    // Reassembly buffer for fragmented messages — stored as unfragmented
+    // DTLS handshake message: 12-byte header (frag_off=0, frag_len=length) + body
+    std::vector<uint8_t> reasm_buf;
 
     explicit dtls_handshake_reader(dtls_record_io<Transport>& r) : rio(r) {}
 
-    void reset() { buf.clear(); pos = 0; }
+    void reset() { buf.clear(); pos = 0; reasm_buf.clear(); }
 
     size_t available() const { return buf.size() - pos; }
 
@@ -238,59 +241,109 @@ struct dtls_handshake_reader {
         if (!rec) return {rec.error};
         if (rec.value.type != ContentType::handshake)
             return {tls_error::unexpected_message};
-        // Append fragment to buffer
         for (size_t i = 0; i < rec.value.fragment.size(); ++i)
             buf.push_back(rec.value.fragment[i]);
         return {tls_error::ok};
     }
 
-    // Buffer data from pre-read record fragment
     void buffer_fragment(std::span<const uint8_t> data) {
         for (size_t i = 0; i < data.size(); ++i)
             buf.push_back(data[i]);
     }
 
-    // Read the next complete DTLS handshake message.
-    // Returns body span (after the 12-byte DTLS handshake header).
-    // Adds the message to transcript as a TLS-style handshake message
-    // (4-byte header + body) for hash compatibility.
-    template <hash_function THash>
-    tls_result<std::pair<DtlsHandshakeHeader, std::span<const uint8_t>>>
-    next_message(TranscriptHash<THash>& transcript)
-    {
-        // Ensure at least 12 bytes for DTLS handshake header
+private:
+    // Read a single fragment (header + body) from the buffer, advancing pos.
+    tls_result<DtlsHandshakeHeader> read_fragment() {
         while (available() < DTLS_HANDSHAKE_HEADER_LENGTH) {
             auto err = fetch_record();
             if (!err) return {{}, err.error};
         }
-
-        // Parse header
         TlsReader hdr_r(std::span<const uint8_t>(buf.data() + pos, available()));
         auto hdr = read_dtls_handshake_header(hdr_r);
-
-        // Ensure full fragment is available
         size_t total = DTLS_HANDSHAKE_HEADER_LENGTH + hdr.fragment_length;
         while (available() < total) {
             auto err = fetch_record();
             if (!err) return {{}, err.error};
         }
+        return {hdr, tls_error::ok};
+    }
 
-        // Body starts after the 12-byte header
-        auto body = std::span<const uint8_t>(buf.data() + pos + DTLS_HANDSHAKE_HEADER_LENGTH,
-                                              hdr.fragment_length);
+    // Read a complete (possibly fragmented) message, reassemble into reasm_buf.
+    // Returns the header (with fragment_length == length) and body pointing
+    // into reasm_buf.
+    tls_result<std::pair<DtlsHandshakeHeader, std::span<const uint8_t>>>
+    read_full_message() {
+        auto first = read_fragment();
+        if (!first) return {{}, first.error};
+        auto hdr = first.value;
+        size_t frag_total = DTLS_HANDSHAKE_HEADER_LENGTH + hdr.fragment_length;
+        auto frag_body = std::span<const uint8_t>(
+            buf.data() + pos + DTLS_HANDSHAKE_HEADER_LENGTH, hdr.fragment_length);
 
-        // Add to transcript as TLS-format: type(1) + length(3) + body
-        // (DTLS transcript uses only the de-fragmented message without
-        // message_seq/fragment_offset/fragment_length per RFC 6347 Section 4.2.6)
-        std::array<uint8_t, 4> tls_hdr{};
-        tls_hdr[0] = static_cast<uint8_t>(hdr.type);
-        tls_hdr[1] = static_cast<uint8_t>((hdr.length >> 16) & 0xFF);
-        tls_hdr[2] = static_cast<uint8_t>((hdr.length >> 8) & 0xFF);
-        tls_hdr[3] = static_cast<uint8_t>(hdr.length & 0xFF);
-        transcript.update(std::span<const uint8_t>(tls_hdr));
-        transcript.update(body);
+        if (hdr.fragment_length == hdr.length) {
+            // Unfragmented — no reassembly needed
+            // Build reasm_buf with the raw bytes for transcript/return
+            reasm_buf.assign(buf.data() + pos, buf.data() + pos + frag_total);
+            pos += frag_total;
+            hdr.fragment_offset = 0;
+            auto body = std::span<const uint8_t>(
+                reasm_buf.data() + DTLS_HANDSHAKE_HEADER_LENGTH, hdr.length);
+            return {{hdr, body}, tls_error::ok};
+        }
 
-        pos += total;
+        // Fragmented — reassemble
+        reasm_buf.resize(DTLS_HANDSHAKE_HEADER_LENGTH + hdr.length, 0);
+        // Copy first fragment's body at the correct offset
+        std::copy(frag_body.begin(), frag_body.end(),
+                  reasm_buf.begin() + DTLS_HANDSHAKE_HEADER_LENGTH + hdr.fragment_offset);
+        size_t received = hdr.fragment_length;
+        pos += frag_total;
+
+        while (received < hdr.length) {
+            auto next = read_fragment();
+            if (!next) return {{}, next.error};
+            auto nhdr = next.value;
+            size_t nfrag_total = DTLS_HANDSHAKE_HEADER_LENGTH + nhdr.fragment_length;
+            auto nfrag_body = std::span<const uint8_t>(
+                buf.data() + pos + DTLS_HANDSHAKE_HEADER_LENGTH, nhdr.fragment_length);
+            std::copy(nfrag_body.begin(), nfrag_body.end(),
+                      reasm_buf.begin() + DTLS_HANDSHAKE_HEADER_LENGTH + nhdr.fragment_offset);
+            received += nhdr.fragment_length;
+            pos += nfrag_total;
+        }
+
+        // Write unfragmented DTLS header into reasm_buf
+        reasm_buf[0] = static_cast<uint8_t>(hdr.type);
+        reasm_buf[1] = static_cast<uint8_t>((hdr.length >> 16) & 0xFF);
+        reasm_buf[2] = static_cast<uint8_t>((hdr.length >> 8) & 0xFF);
+        reasm_buf[3] = static_cast<uint8_t>(hdr.length & 0xFF);
+        reasm_buf[4] = static_cast<uint8_t>((hdr.message_seq >> 8) & 0xFF);
+        reasm_buf[5] = static_cast<uint8_t>(hdr.message_seq & 0xFF);
+        reasm_buf[6] = 0; reasm_buf[7] = 0; reasm_buf[8] = 0; // frag_offset = 0
+        reasm_buf[9] = static_cast<uint8_t>((hdr.length >> 16) & 0xFF);
+        reasm_buf[10] = static_cast<uint8_t>((hdr.length >> 8) & 0xFF);
+        reasm_buf[11] = static_cast<uint8_t>(hdr.length & 0xFF);
+
+        hdr.fragment_offset = 0;
+        hdr.fragment_length = hdr.length;
+        auto body = std::span<const uint8_t>(
+            reasm_buf.data() + DTLS_HANDSHAKE_HEADER_LENGTH, hdr.length);
+        return {{hdr, body}, tls_error::ok};
+    }
+
+public:
+    // Read the next complete DTLS handshake message (with reassembly).
+    // Returns body span. Adds the full unfragmented DTLS handshake message
+    // (12-byte header + body) to transcript, matching OpenSSL.
+    template <hash_function THash>
+    tls_result<std::pair<DtlsHandshakeHeader, std::span<const uint8_t>>>
+    next_message(TranscriptHash<THash>& transcript)
+    {
+        auto msg = read_full_message();
+        if (!msg) return {{}, msg.error};
+        auto [hdr, body] = msg.value;
+        // Hash the complete unfragmented DTLS message from reasm_buf
+        transcript.update(std::span<const uint8_t>(reasm_buf));
         return {{hdr, body}, tls_error::ok};
     }
 
@@ -298,24 +351,7 @@ struct dtls_handshake_reader {
     tls_result<std::pair<DtlsHandshakeHeader, std::span<const uint8_t>>>
     next_message_no_transcript()
     {
-        while (available() < DTLS_HANDSHAKE_HEADER_LENGTH) {
-            auto err = fetch_record();
-            if (!err) return {{}, err.error};
-        }
-
-        TlsReader hdr_r(std::span<const uint8_t>(buf.data() + pos, available()));
-        auto hdr = read_dtls_handshake_header(hdr_r);
-
-        size_t total = DTLS_HANDSHAKE_HEADER_LENGTH + hdr.fragment_length;
-        while (available() < total) {
-            auto err = fetch_record();
-            if (!err) return {{}, err.error};
-        }
-
-        auto body = std::span<const uint8_t>(buf.data() + pos + DTLS_HANDSHAKE_HEADER_LENGTH,
-                                              hdr.fragment_length);
-        pos += total;
-        return {{hdr, body}, tls_error::ok};
+        return read_full_message();
     }
 };
 

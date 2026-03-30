@@ -270,6 +270,57 @@ run_test "dtls_required_mtls_no_cert" "fail" \
 kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
 
 # ============================================================
+# OpenSSL interop tests
+# ============================================================
+
+echo ""
+echo "=== Test: OpenSSL s_client vs our server (EC) ==="
+
+PORT=$(get_port 14440)
+$SERVER_TOOL "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_openssl_client_ec" "pass" \
+    bash -c "echo 'hello' | timeout 12 openssl s_client -dtls1_2 \
+        -connect 127.0.0.1:$PORT -CAfile '$TMPDIR/ca.pem' 2>&1 \
+        | grep -q 'Verify return code: 0'"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+sleep 0.5
+
+echo ""
+echo "=== Test: Our client vs OpenSSL s_server (EC) ==="
+
+PORT=$(get_port 14440)
+sleep 30 | openssl s_server -dtls1_2 -4 -accept "$PORT" \
+    -cert "$TMPDIR/chain.pem" -key "$TMPDIR/server_key.pem" 2>/dev/null &
+SERVER_PID=$!
+sleep 2
+
+run_test "dtls_openssl_server_ec" "pass" \
+    bash -c "timeout 15 $CLIENT_TOOL --cafile '$TMPDIR/ca.pem' \
+        localhost $PORT 2>&1 | grep -q 'DTLS handshake complete'"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+sleep 0.5
+
+echo ""
+echo "=== Test: OpenSSL s_client vs our server (RSA) ==="
+
+PORT=$(get_port 14440)
+$SERVER_TOOL "$TMPDIR/rsa_chain.pem" "$TMPDIR/rsa_server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_openssl_client_rsa" "pass" \
+    bash -c "echo 'hello' | timeout 12 openssl s_client -dtls1_2 \
+        -connect 127.0.0.1:$PORT -CAfile '$TMPDIR/rsa_ca.pem' 2>&1 \
+        | grep -q 'Verify return code: 0'"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+
+# ============================================================
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
