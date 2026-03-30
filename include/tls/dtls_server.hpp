@@ -374,17 +374,15 @@ private:
 
         TranscriptHash<Hash> transcript;
 
-        // Add ClientHello to transcript — strip the DTLS cookie field so the
-        // transcript matches TLS format (required for OpenSSL interop).
-        auto stripped_ch = strip_cookie_from_client_hello(client_hello_body);
-        uint32_t stripped_len = static_cast<uint32_t>(stripped_ch.size());
+        // Add ClientHello to transcript (TLS-style 4-byte header + DTLS body)
+        uint32_t ch_len = static_cast<uint32_t>(client_hello_body.size());
         std::array<uint8_t, 4> tls_ch_hdr{};
         tls_ch_hdr[0] = static_cast<uint8_t>(HandshakeType::client_hello);
-        tls_ch_hdr[1] = static_cast<uint8_t>((stripped_len >> 16) & 0xFF);
-        tls_ch_hdr[2] = static_cast<uint8_t>((stripped_len >> 8) & 0xFF);
-        tls_ch_hdr[3] = static_cast<uint8_t>(stripped_len & 0xFF);
+        tls_ch_hdr[1] = static_cast<uint8_t>((ch_len >> 16) & 0xFF);
+        tls_ch_hdr[2] = static_cast<uint8_t>((ch_len >> 8) & 0xFF);
+        tls_ch_hdr[3] = static_cast<uint8_t>(ch_len & 0xFF);
         transcript.update(std::span<const uint8_t>(tls_ch_hdr));
-        transcript.update(std::span<const uint8_t>(stripped_ch));
+        transcript.update(client_hello_body);
 
         // --- Send ServerHello ---
         server_random_ = random_bytes<32>(rng_);
