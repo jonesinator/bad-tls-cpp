@@ -704,11 +704,18 @@ void test_istream() {
     iss >> a;
     assert(a == u128(42U));
 
-    // Hex with prefix
+    // Hex with std::hex manipulator
     u128 b;
     std::istringstream hex_iss("0xFF");
-    hex_iss >> b;
+    hex_iss >> std::hex >> b;
     assert(b == u128(255U));
+
+    // Auto-detect from prefix (no basefield set)
+    u128 c;
+    std::istringstream auto_iss("0xFF");
+    auto_iss.unsetf(std::ios_base::basefield);
+    auto_iss >> c;
+    assert(c == u128(255U));
 }
 
 // ===== std::format =====
