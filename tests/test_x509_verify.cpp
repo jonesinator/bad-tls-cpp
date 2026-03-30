@@ -238,10 +238,10 @@ void test_custom_verifier() {
     // Always-pass verifier: chain should succeed
     assert(verify_chain(chain, store, always_pass_verifier{}));
 
-    // Depth limit 0: leaf resolves directly to trust store at depth 0
-    assert(verify_chain(chain, store, depth_limit_verifier{0}));
+    // Depth limit 0: fails because the root CA is verified at depth 1
+    assert(!verify_chain(chain, store, depth_limit_verifier{0}));
 
-    // Depth limit 1: also passes
+    // Depth limit 1: passes (leaf at 0, root at 1)
     assert(verify_chain(chain, store, depth_limit_verifier{1}));
 }
 
@@ -257,8 +257,8 @@ void test_multiple_verifiers() {
     // Two passing verifiers: should pass
     assert(verify_chain(chain, store, always_pass_verifier{}, depth_limit_verifier{5}));
 
-    // Two passing verifiers with depth 0: leaf resolves directly to trust store
-    assert(verify_chain(chain, store, always_pass_verifier{}, depth_limit_verifier{0}));
+    // Two passing verifiers with depth 1: leaf at 0, root at 1
+    assert(verify_chain(chain, store, always_pass_verifier{}, depth_limit_verifier{1}));
 }
 
 // --- Time verifier tests ---
