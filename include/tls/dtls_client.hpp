@@ -106,7 +106,7 @@ public:
             auto hvr = read_hello_verify_request(hvr_r);
 
             // --- Phase 2: Re-send ClientHello with cookie ---
-            next_send_seq_ = 0;  // Reset per RFC 6347 Section 4.2.1
+            // Keep next_send_seq_=1 (second ClientHello gets message_seq=1)
             ch.cookie = hvr.cookie;
 
             TlsWriter<2048> ch2_w;
@@ -153,20 +153,21 @@ public:
                 using Hash = typename Traits::hash_type;
                 TranscriptHash<Hash> transcript;
 
-                // Add ClientHello to transcript (TLS format: 4-byte header + body)
-                // From the DTLS writer: skip 12-byte DTLS header, get body
+                // Add ClientHello to transcript — strip the DTLS cookie field
+                // for TLS-compatible transcript hashing.
                 auto ch2_span = std::span<const uint8_t>(ch2_bytes.data(), ch2_bytes.size());
-                // Parse DTLS header to get body
                 TlsReader ch2_r(ch2_span);
                 auto ch2_hdr = read_dtls_handshake_header(ch2_r);
                 auto ch2_body = ch2_r.read_bytes(ch2_hdr.fragment_length);
+                auto stripped_ch = strip_cookie_from_client_hello(ch2_body);
+                uint32_t stripped_len = static_cast<uint32_t>(stripped_ch.size());
                 std::array<uint8_t, 4> tls_ch_hdr{};
                 tls_ch_hdr[0] = static_cast<uint8_t>(HandshakeType::client_hello);
-                tls_ch_hdr[1] = static_cast<uint8_t>((ch2_hdr.length >> 16) & 0xFF);
-                tls_ch_hdr[2] = static_cast<uint8_t>((ch2_hdr.length >> 8) & 0xFF);
-                tls_ch_hdr[3] = static_cast<uint8_t>(ch2_hdr.length & 0xFF);
+                tls_ch_hdr[1] = static_cast<uint8_t>((stripped_len >> 16) & 0xFF);
+                tls_ch_hdr[2] = static_cast<uint8_t>((stripped_len >> 8) & 0xFF);
+                tls_ch_hdr[3] = static_cast<uint8_t>(stripped_len & 0xFF);
                 transcript.update(std::span<const uint8_t>(tls_ch_hdr));
-                transcript.update(ch2_body);
+                transcript.update(std::span<const uint8_t>(stripped_ch));
 
                 // Add ServerHello to transcript
                 std::array<uint8_t, 4> tls_sh_hdr{};
@@ -203,18 +204,20 @@ public:
                 using Hash = typename Traits::hash_type;
                 TranscriptHash<Hash> transcript;
 
-                // Add ClientHello to transcript
+                // Add ClientHello to transcript (strip cookie for consistency)
                 auto ch_span = std::span<const uint8_t>(ch_w.data().data(), ch_w.size());
                 TlsReader ch_r2(ch_span);
                 auto ch_hdr2 = read_dtls_handshake_header(ch_r2);
-                auto ch_body2 = ch_r2.read_bytes(ch_hdr2.fragment_length);
+                auto ch_body2_raw = ch_r2.read_bytes(ch_hdr2.fragment_length);
+                auto ch_body2 = strip_cookie_from_client_hello(ch_body2_raw);
+                auto ch_body2_len = static_cast<uint32_t>(ch_body2.size());
                 std::array<uint8_t, 4> tls_ch_hdr{};
                 tls_ch_hdr[0] = static_cast<uint8_t>(HandshakeType::client_hello);
-                tls_ch_hdr[1] = static_cast<uint8_t>((ch_hdr2.length >> 16) & 0xFF);
-                tls_ch_hdr[2] = static_cast<uint8_t>((ch_hdr2.length >> 8) & 0xFF);
-                tls_ch_hdr[3] = static_cast<uint8_t>(ch_hdr2.length & 0xFF);
+                tls_ch_hdr[1] = static_cast<uint8_t>((ch_body2_len >> 16) & 0xFF);
+                tls_ch_hdr[2] = static_cast<uint8_t>((ch_body2_len >> 8) & 0xFF);
+                tls_ch_hdr[3] = static_cast<uint8_t>(ch_body2_len & 0xFF);
                 transcript.update(std::span<const uint8_t>(tls_ch_hdr));
-                transcript.update(ch_body2);
+                transcript.update(std::span<const uint8_t>(ch_body2));
 
                 // Add ServerHello to transcript
                 std::array<uint8_t, 4> tls_sh_hdr{};
@@ -527,10 +530,15 @@ private:
         if (!fin_err) return {fin_err.error};
 
         // --- Receive server ChangeCipherSpec ---
-        auto server_ccs = rio_.recv_record();
-        if (!server_ccs) return {server_ccs.error};
-        if (server_ccs.value.type != ContentType::change_cipher_spec)
+        // Skip retransmitted server flight records (epoch 0 handshake)
+        while (true) {
+            auto server_ccs = rio_.recv_record();
+            if (!server_ccs) return {server_ccs.error};
+            if (server_ccs.value.type == ContentType::change_cipher_spec) break;
+            if (server_ccs.value.type == ContentType::handshake &&
+                server_ccs.value.epoch == 0) continue;
             return {tls_error::unexpected_message};
+        }
 
         rio_.activate_read_cipher(kb, negotiated_suite_);
 

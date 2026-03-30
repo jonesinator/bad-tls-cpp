@@ -108,32 +108,47 @@ public:
         if (!hvr_err) return {hvr_err.error};
 
         // --- Phase 3: Receive ClientHello with cookie ---
-        auto ch2_rec = rio_.recv_record();
-        if (!ch2_rec) return {ch2_rec.error};
-        if (ch2_rec.value.type != ContentType::handshake)
-            return {tls_error::unexpected_message};
+        // The client may retransmit the initial ClientHello (no cookie) before
+        // sending the second one. Loop until we get a valid cookie.
+        DtlsClientHello ch2{};
+        std::vector<uint8_t> ch2_body_storage;
+        for (int attempts = 0; attempts < 30; ++attempts) {
+            auto ch2_rec = rio_.recv_record();
+            if (!ch2_rec) {
+                if (ch2_rec.error == tls_error::transport_closed) continue;
+                return {ch2_rec.error};
+            }
+            if (ch2_rec.value.type != ContentType::handshake) continue;
 
-        TlsReader ch2_r(std::span<const uint8_t>(
-            ch2_rec.value.fragment.data.data(), ch2_rec.value.fragment.size()));
-        auto ch2_dtls_hdr = read_dtls_handshake_header(ch2_r);
-        if (ch2_dtls_hdr.type != HandshakeType::client_hello)
-            return {tls_error::unexpected_message};
+            TlsReader ch2_r(std::span<const uint8_t>(
+                ch2_rec.value.fragment.data.data(), ch2_rec.value.fragment.size()));
+            auto ch2_dtls_hdr = read_dtls_handshake_header(ch2_r);
+            if (ch2_dtls_hdr.type != HandshakeType::client_hello) continue;
 
-        auto ch2_body_data = ch2_r.read_bytes(ch2_dtls_hdr.fragment_length);
-        TlsReader ch2_body_r(ch2_body_data);
-        auto ch2 = read_dtls_client_hello(ch2_body_r);
+            auto ch2_body_data = ch2_r.read_bytes(ch2_dtls_hdr.fragment_length);
+            TlsReader ch2_body_r(ch2_body_data);
+            ch2 = read_dtls_client_hello(ch2_body_r);
+            ch2_body_storage.assign(ch2_body_data.begin(), ch2_body_data.end());
 
-        // Validate cookie
-        auto expected_cookie = hmac<sha256_state>(
-            std::span<const uint8_t>(config_.cookie_secret),
-            std::span<const uint8_t>(ch2.random));
-        if (ch2.cookie.size() != 32) return {tls_error::handshake_failure};
-        for (size_t i = 0; i < 32; ++i) {
-            if (ch2.cookie[i] != expected_cookie[i])
-                return {tls_error::handshake_failure};
+            auto expected_cookie = hmac<sha256_state>(
+                std::span<const uint8_t>(config_.cookie_secret),
+                std::span<const uint8_t>(ch2.random));
+            if (ch2.cookie.size() == 32) {
+                bool ok = true;
+                for (size_t i = 0; i < 32; ++i)
+                    if (ch2.cookie[i] != expected_cookie[i]) { ok = false; break; }
+                if (ok) break;
+            }
+            // Retransmit — re-send HVR
+            rio_.send_record(ContentType::handshake, hvr_w.data());
         }
+        if (ch2.cookie.size() != 32) return {tls_error::handshake_failure};
 
         client_random_ = ch2.random;
+
+        // Per RFC 6347 Section 4.2.1, the server's handshake message numbering
+        // continues after the client's second ClientHello (message_seq=1).
+        next_send_seq_ = 1;
 
         // Select cipher suite
         bool is_rsa_key = std::holds_alternative<rsa_private_key<rsa_num>>(config_.private_key);
@@ -155,7 +170,8 @@ public:
 
         // Build transcript ClientHello bytes (TLS format: 4-byte header + body)
         return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
-            return handshake_continue<Traits>(ch2_body_data, ch2_dtls_hdr.length);
+            return handshake_continue<Traits>(
+                std::span<const uint8_t>(ch2_body_storage));
         });
     }
 
@@ -352,21 +368,23 @@ private:
 
     template <typename Traits>
     tls_result<void> handshake_continue(
-        std::span<const uint8_t> client_hello_body,
-        uint32_t client_hello_length)
+        std::span<const uint8_t> client_hello_body)
     {
         using Hash = typename Traits::hash_type;
 
         TranscriptHash<Hash> transcript;
 
-        // Add ClientHello to transcript (TLS format)
+        // Add ClientHello to transcript — strip the DTLS cookie field so the
+        // transcript matches TLS format (required for OpenSSL interop).
+        auto stripped_ch = strip_cookie_from_client_hello(client_hello_body);
+        uint32_t stripped_len = static_cast<uint32_t>(stripped_ch.size());
         std::array<uint8_t, 4> tls_ch_hdr{};
         tls_ch_hdr[0] = static_cast<uint8_t>(HandshakeType::client_hello);
-        tls_ch_hdr[1] = static_cast<uint8_t>((client_hello_length >> 16) & 0xFF);
-        tls_ch_hdr[2] = static_cast<uint8_t>((client_hello_length >> 8) & 0xFF);
-        tls_ch_hdr[3] = static_cast<uint8_t>(client_hello_length & 0xFF);
+        tls_ch_hdr[1] = static_cast<uint8_t>((stripped_len >> 16) & 0xFF);
+        tls_ch_hdr[2] = static_cast<uint8_t>((stripped_len >> 8) & 0xFF);
+        tls_ch_hdr[3] = static_cast<uint8_t>(stripped_len & 0xFF);
         transcript.update(std::span<const uint8_t>(tls_ch_hdr));
-        transcript.update(client_hello_body);
+        transcript.update(std::span<const uint8_t>(stripped_ch));
 
         // --- Send ServerHello ---
         server_random_ = random_bytes<32>(rng_);

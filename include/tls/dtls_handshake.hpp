@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace tls {
 
@@ -288,6 +289,34 @@ template <size_t Cap>
 void write_dtls_finished(TlsWriter<Cap>& w, uint16_t message_seq, const Finished& msg) {
     write_dtls_handshake_message(w, HandshakeType::finished, message_seq,
         std::span<const uint8_t>(msg.verify_data));
+}
+
+// Strip the DTLS cookie field from a ClientHello body to produce a
+// TLS-compatible body for transcript hashing. The DTLS ClientHello body
+// has a cookie_len+cookie between session_id and cipher_suites which
+// TLS ClientHello does not. Both peers must agree on this for verify_data.
+inline std::vector<uint8_t> strip_cookie_from_client_hello(std::span<const uint8_t> body) {
+    std::vector<uint8_t> result;
+    size_t pos = 0;
+    // version(2) + random(32) = 34 bytes
+    for (size_t i = 0; i < 34 && pos < body.size(); ++i)
+        result.push_back(body[pos++]);
+    // session_id_len(1) + session_id(N)
+    if (pos >= body.size()) return result;
+    uint8_t sid_len = body[pos];
+    result.push_back(sid_len);
+    pos++;
+    for (size_t i = 0; i < sid_len && pos < body.size(); ++i)
+        result.push_back(body[pos++]);
+    // cookie_len(1) + cookie(M) — skip, write cookie_len=0
+    if (pos >= body.size()) return result;
+    uint8_t cookie_len = body[pos++];
+    pos += cookie_len;
+    result.push_back(0);
+    // rest (cipher_suites, compression, extensions)
+    while (pos < body.size())
+        result.push_back(body[pos++]);
+    return result;
 }
 
 } // namespace tls
