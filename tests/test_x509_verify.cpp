@@ -370,7 +370,7 @@ void test_key_usage_verifier_no_extension() {
 
 void test_key_usage_bit_testing() {
     // Test the bit testing helper directly
-    der::BitString bs;
+    asn1::der::BitString bs;
     bs.bytes = {0x06};  // bits: 00000110 → bits 5 and 6 set (keyCertSign, cRLSign)
     bs.unused_bits = 1;
 
