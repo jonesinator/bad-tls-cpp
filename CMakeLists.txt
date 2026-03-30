@@ -57,6 +57,9 @@ add_asn1_test(test_mozilla_roots)
 add_asn1_test(test_hostname_verifier)
 add_asn1_test(test_tcp_transport)
 add_asn1_test(test_private_key)
+add_asn1_test(test_dtls_record)
+add_asn1_test(test_dtls_record_protection)
+add_asn1_test(test_dtls_handshake)
 
 add_executable(x509_tool tests/x509_tool.cpp)
 target_link_libraries(x509_tool PRIVATE asn1)
@@ -83,6 +86,16 @@ target_link_libraries(tls_server_tool PRIVATE asn1)
 target_include_directories(tls_server_tool PRIVATE ${CMAKE_SOURCE_DIR})
 target_compile_options(tls_server_tool PRIVATE -Wall -Wextra -pedantic -Werror -O2 --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
 
+add_executable(dtls_connect_tool tests/dtls_connect_tool.cpp)
+target_link_libraries(dtls_connect_tool PRIVATE asn1)
+target_include_directories(dtls_connect_tool PRIVATE ${CMAKE_SOURCE_DIR})
+target_compile_options(dtls_connect_tool PRIVATE -Wall -Wextra -pedantic -Werror -O2 --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
+
+add_executable(dtls_server_tool tests/dtls_server_tool.cpp)
+target_link_libraries(dtls_server_tool PRIVATE asn1)
+target_include_directories(dtls_server_tool PRIVATE ${CMAKE_SOURCE_DIR})
+target_compile_options(dtls_server_tool PRIVATE -Wall -Wextra -pedantic -Werror -O2 --embed-dir=${CMAKE_SOURCE_DIR} --embed-dir=${CMAKE_BINARY_DIR} -fconstexpr-ops-limit=1000000000)
+
 
 # Full check: build everything, run unit tests, OpenSSL interop, TLS integration
 add_custom_target(check
@@ -91,11 +104,14 @@ add_custom_target(check
     COMMAND ${CMAKE_SOURCE_DIR}/tests/test_tls_integration.sh ${CMAKE_BINARY_DIR}/tls_connect_tool
     COMMAND ${CMAKE_SOURCE_DIR}/tests/test_tls_server.sh ${CMAKE_BINARY_DIR}
     COMMAND ${CMAKE_SOURCE_DIR}/tests/test_tls_openssl_server.sh ${CMAKE_BINARY_DIR}
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/test_dtls_server.sh ${CMAKE_BINARY_DIR}
     DEPENDS ${CMAKE_SOURCE_DIR}/tests/test_openssl_interop.sh
             ${CMAKE_SOURCE_DIR}/tests/test_tls_integration.sh
             ${CMAKE_SOURCE_DIR}/tests/test_tls_server.sh
             ${CMAKE_SOURCE_DIR}/tests/test_tls_openssl_server.sh
+            ${CMAKE_SOURCE_DIR}/tests/test_dtls_server.sh
             tls_connect_tool tls_server_tool x509_tool rsa_tool ecdsa_tool
-    COMMENT "Running full check: unit tests + OpenSSL interop + TLS integration + server"
+            dtls_connect_tool dtls_server_tool
+    COMMENT "Running full check: unit tests + OpenSSL interop + TLS integration + server + DTLS"
     USES_TERMINAL
 )

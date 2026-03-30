@@ -31,11 +31,16 @@ inline constexpr ProtocolVersion TLS_1_0{3, 1};
 inline constexpr ProtocolVersion TLS_1_1{3, 2};
 inline constexpr ProtocolVersion TLS_1_2{3, 3};
 
+// DTLS versions use inverted numbering — RFC 6347 Section 4.1
+inline constexpr ProtocolVersion DTLS_1_0{254, 255};  // 0xFEFF
+inline constexpr ProtocolVersion DTLS_1_2{254, 253};  // 0xFEFD
+
 // RFC 5246 Section 7.4
 enum class HandshakeType : uint8_t {
-    client_hello        = 1,
-    server_hello        = 2,
-    certificate         = 11,
+    client_hello         = 1,
+    server_hello         = 2,
+    hello_verify_request = 3,   // DTLS — RFC 6347 Section 4.2.1
+    certificate          = 11,
     server_key_exchange = 12,
     certificate_request = 13,
     server_hello_done   = 14,

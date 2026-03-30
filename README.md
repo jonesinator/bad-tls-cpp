@@ -1,6 +1,6 @@
 # bad-tls-cpp
 
-A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, elliptic curve cryptography (ECC), and TLS 1.2 with mutual TLS (mTLS) support. The core modules (ASN.1, big integers, crypto) are fully constexpr — ASN.1 schema parsing through cryptographic operations can execute at compile time. The TLS and X.509 modules operate at runtime. Designed for educational purposes, prioritizing clarity over performance.
+A header-only C++26 library implementing ASN.1 parsing, DER encoding/decoding, elliptic curve cryptography (ECC), TLS 1.2, and DTLS 1.2 with mutual TLS/DTLS (mTLS) support. The core modules (ASN.1, big integers, crypto) are fully constexpr — ASN.1 schema parsing through cryptographic operations can execute at compile time. The TLS and X.509 modules operate at runtime. Designed for educational purposes, prioritizing clarity over performance.
 
 ## Project Structure
 
@@ -59,7 +59,14 @@ bad-tls-cpp/
 │       ├── client.hpp                # tls_client handshake state machine
 │       ├── server.hpp                # tls_server handshake state machine
 │       ├── private_key.hpp           # EC and RSA private key loading from PEM
-│       └── tcp_transport.hpp         # POSIX TCP socket + listener transport
+│       ├── tcp_transport.hpp         # POSIX TCP socket + listener transport
+│       ├── udp_transport.hpp         # POSIX UDP socket + listener transport (DTLS)
+│       ├── dtls_record.hpp           # DTLS record framing (13-byte header)
+│       ├── dtls_record_protection.hpp # DTLS AES-GCM nonce/AAD + anti-replay window
+│       ├── dtls_handshake.hpp        # DTLS handshake headers + HelloVerifyRequest
+│       ├── dtls_connection.hpp       # DTLS record I/O + handshake reader
+│       ├── dtls_client.hpp           # dtls_client handshake with cookie exchange
+│       └── dtls_server.hpp           # dtls_server handshake with HelloVerifyRequest
 └── tests/                            # Comprehensive test suite
 ```
 
@@ -267,7 +274,39 @@ Loads EC and RSA private keys from PEM files. EC keys: handles SEC 1 format (`EC
 
 ### TCP Transport (`tls/tcp_transport.hpp`)
 
-POSIX socket implementation of the `transport` concept. `tcp_transport` takes `(hostname, port)` and connects via `getaddrinfo` (IPv4/IPv6). Blocking I/O, RAII (destructor closes), move-only. `write()` loops internally to ensure all bytes are sent. `read()` returns a single `::read()` result (partial reads handled by `record_io`). `tcp_listener` provides server-side socket listening: constructor binds and listens, `accept()` blocks until a client connects and returns a `tcp_transport` wrapping the accepted socket.
+POSIX TCP socket implementation of the `transport` concept. `tcp_transport` takes `(hostname, port)` and connects via `getaddrinfo` (IPv4/IPv6). Blocking I/O, RAII (destructor closes), move-only. `write()` loops internally to ensure all bytes are sent. `read()` returns a single `::read()` result (partial reads handled by `record_io`). `tcp_listener` provides server-side socket listening: constructor binds and listens, `accept()` blocks until a client connects and returns a `tcp_transport` wrapping the accepted socket.
+
+## The DTLS 1.2 Layer (`tls/dtls_*.hpp`)
+
+DTLS 1.2 (RFC 6347) adapts TLS 1.2 for unreliable datagram transport (UDP). The implementation reuses all TLS 1.2 crypto, key schedule, cipher suite, and X.509 infrastructure, adding only the datagram-specific framing, handshake state machine, and transport layers.
+
+### UDP Transport (`tls/udp_transport.hpp`)
+
+POSIX UDP socket implementation of the `transport` concept. `udp_transport` connects via `getaddrinfo` (IPv4). `udp_listener` binds a UDP socket, receives the first datagram via `recvfrom()`, connects to the peer, and transfers socket ownership. Move-only RAII.
+
+### DTLS Record Layer (`tls/dtls_record.hpp`)
+
+DTLS records have a 13-byte header (vs. TLS's 5-byte): type(1) + version(2) + epoch(2) + sequence_number(6) + length(2). `DtlsRecord` includes epoch and sequence number fields. DTLS handshake messages have a 12-byte header adding message_seq, fragment_offset, and fragment_length for reassembly.
+
+### DTLS Record Protection (`tls/dtls_record_protection.hpp`)
+
+AES-GCM encryption/decryption adapted for DTLS: nonce is `fixed_iv(4) || epoch(2) || seq(6)`, AAD uses `epoch(2) || seq(6)` instead of TLS's `seq(8)`. Includes a sliding-window `replay_window` (64-entry bitmap per RFC 6347 Section 4.1.2.6) for anti-replay protection.
+
+### DTLS Handshake Messages (`tls/dtls_handshake.hpp`)
+
+DTLS-specific messages: `HelloVerifyRequest` (cookie exchange for DoS protection), `DtlsClientHello` (adds cookie field). All TLS handshake messages (ServerHello, Certificate, ServerKeyExchange, etc.) are serialized with DTLS 12-byte headers via wrapper functions.
+
+### DTLS Connection Infrastructure (`tls/dtls_connection.hpp`)
+
+`dtls_record_io<Transport>` manages datagram-oriented record I/O with epoch tracking (incremented on ChangeCipherSpec), 48-bit sequence numbers, anti-replay, and datagram buffering (a single UDP datagram may contain multiple DTLS records). `dtls_handshake_reader` parses DTLS handshake headers and feeds the transcript hash in TLS format (4-byte header) per RFC 6347 Section 4.2.6.
+
+### DTLS Client (`tls/dtls_client.hpp`)
+
+`dtls_client<Transport, RNG>` performs a full DTLS 1.2 ECDHE handshake with cookie exchange: sends initial ClientHello, handles HelloVerifyRequest, re-sends ClientHello with cookie, then proceeds through the standard TLS 1.2 message flow. Supports certificate verification, hostname verification, and mutual DTLS with EC and RSA client certificates. Same four cipher suites as TLS.
+
+### DTLS Server (`tls/dtls_server.hpp`)
+
+`dtls_server<Transport, RNG>` performs the server side of a DTLS 1.2 ECDHE handshake. Sends HelloVerifyRequest with an HMAC-SHA256 cookie for DoS protection, validates the cookie on the second ClientHello, then proceeds through the standard server handshake. Supports both ECDSA and RSA server keys, and mutual DTLS with EC and RSA client certificates.
 
 ## ASN.1 Definitions
 
@@ -316,6 +355,12 @@ The test suite is comprehensive:
 | `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
+| `test_dtls_record.cpp` | DTLS record framing: 13-byte header, 48-bit sequence numbers, roundtrip serialization |
+| `test_dtls_record_protection.cpp` | DTLS nonce/AAD construction, AES-GCM encrypt/decrypt roundtrip, anti-replay window |
+| `test_dtls_handshake.cpp` | DTLS handshake headers, HelloVerifyRequest, DtlsClientHello with/without cookie, Finished |
+| `dtls_connect_tool.cpp` | DTLS client tool with `--cafile`, `--cert`, `--key` for custom CA and mTLS |
+| `dtls_server_tool.cpp` | DTLS server tool with `--client-ca` and `--require-client-cert` for mTLS |
+| `test_dtls_server.sh` | DTLS integration: ECDSA/RSA server keys, optional/required mTLS, cross-key-type mTLS |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
 
 ## Build
@@ -338,7 +383,7 @@ A `Containerfile` (Debian sid) provides a reproducible build environment with al
 CONTAINER_CMD=docker ./container-check.sh   # uses docker
 ```
 
-This builds from scratch inside the container and runs the full `check` target (25 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 9 TLS server tests, 4 OpenSSL server interop tests).
+This builds from scratch inside the container and runs the full `check` target (28 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 9 TLS server tests, 4 OpenSSL server interop tests, 8 DTLS integration tests).
 
 ## Design Philosophy
 
