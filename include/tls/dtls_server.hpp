@@ -48,6 +48,9 @@ struct dtls_server_config {
 
     // Cookie secret for HelloVerifyRequest HMAC
     std::array<uint8_t, 32> cookie_secret{};
+
+    // ALPN protocol names (empty = don't negotiate ALPN) — RFC 7301
+    std::span<const std::string_view> alpn_protocols;
 };
 
 template <transport Transport, random_generator RNG>
@@ -62,6 +65,7 @@ class dtls_server {
     std::array<uint8_t, 48> master_secret_{};
     bool handshake_complete_ = false;
     bool client_authenticated_ = false;
+    std::string negotiated_protocol_;
     uint16_t next_send_seq_ = 0;
 
 public:
@@ -173,6 +177,41 @@ public:
         }
         if (!suite_found) return {tls_error::handshake_failure};
 
+        // Parse ClientHello extensions for ALPN (RFC 7301)
+        if (!config_.alpn_protocols.empty() && ch2.extensions.size() > 0) {
+            TlsReader ext_r(std::span<const uint8_t>(
+                ch2.extensions.data.data(), ch2.extensions.len));
+            while (ext_r.remaining() >= 4) {
+                uint16_t ext_type = ext_r.read_u16();
+                uint16_t ext_len = ext_r.read_u16();
+                if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 2) {
+                    auto alpn_data = ext_r.read_bytes(ext_len);
+                    TlsReader alpn_r(alpn_data);
+                    uint16_t list_len = alpn_r.read_u16();
+                    size_t consumed = 0;
+                    while (consumed < list_len && alpn_r.remaining() > 0) {
+                        uint8_t name_len = alpn_r.read_u8();
+                        consumed += 1 + name_len;
+                        if (name_len == 0 || name_len > alpn_r.remaining()) break;
+                        auto name_bytes = alpn_r.read_bytes(name_len);
+                        std::string_view client_proto(
+                            reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
+                        for (size_t k = 0; k < config_.alpn_protocols.size(); ++k) {
+                            if (config_.alpn_protocols[k] == client_proto) {
+                                negotiated_protocol_ = std::string(client_proto);
+                                goto dtls_alpn_done;
+                            }
+                        }
+                    }
+                    // Client sent ALPN but no match — fatal error per RFC 7301
+                    return {tls_error::handshake_failure};
+                } else {
+                    if (ext_len > 0) ext_r.read_bytes(ext_len);
+                }
+            }
+        }
+        dtls_alpn_done:
+
         // Build transcript with full DTLS ClientHello message (12-byte header + body)
         return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
             return handshake_continue<Traits>(
@@ -217,6 +256,7 @@ public:
     bool is_connected() const { return handshake_complete_; }
     bool client_authenticated() const { return client_authenticated_; }
     CipherSuite negotiated_suite() const { return negotiated_suite_; }
+    std::string_view negotiated_protocol() const { return negotiated_protocol_; }
 
 private:
     template <typename Num>
@@ -385,13 +425,33 @@ private:
         sh.cipher_suite = negotiated_suite_;
         sh.compression_method = CompressionMethod::null;
 
-        // Add renegotiation_info extension
+        // Build ServerHello extensions
         {
-            TlsWriter<32> ext_w;
-            ext_w.write_u16(5);
+            TlsWriter<128> ext_w;
+            size_t ext_list_pos = ext_w.position();
+            ext_w.write_u16(0); // placeholder for total extensions length
+
+            // renegotiation_info (RFC 5746)
             ext_w.write_u16(static_cast<uint16_t>(ExtensionType::renegotiation_info));
             ext_w.write_u16(1);
             ext_w.write_u8(0);
+
+            // ALPN (RFC 7301) — echo selected protocol if negotiated
+            if (!negotiated_protocol_.empty()) {
+                ext_w.write_u16(static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation));
+                uint16_t name_len = static_cast<uint16_t>(negotiated_protocol_.size());
+                ext_w.write_u16(static_cast<uint16_t>(2 + 1 + name_len));
+                ext_w.write_u16(static_cast<uint16_t>(1 + name_len));
+                ext_w.write_u8(static_cast<uint8_t>(name_len));
+                ext_w.write_bytes(std::span<const uint8_t>(
+                    reinterpret_cast<const uint8_t*>(negotiated_protocol_.data()),
+                    negotiated_protocol_.size()));
+            }
+
+            // Patch total extensions length
+            uint16_t total = static_cast<uint16_t>(ext_w.position() - ext_list_pos - 2);
+            ext_w.patch_u16(ext_list_pos, total);
+
             for (size_t i = 0; i < ext_w.size(); ++i)
                 sh.extensions.push_back(ext_w.data()[i]);
         }

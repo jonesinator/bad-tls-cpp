@@ -108,7 +108,8 @@ constexpr void write_client_hello_extensions(
     TlsWriter<Cap>& w,
     std::span<const NamedCurve> curves,
     std::span<const SignatureAndHashAlgorithm> sig_algs,
-    std::string_view hostname = {})
+    std::string_view hostname = {},
+    std::span<const std::string_view> alpn_protocols = {})
 {
     // We'll write extensions into the writer, prefixed with total extensions length.
     // Save position for the outer length, then patch it.
@@ -171,6 +172,22 @@ constexpr void write_client_hello_extensions(
         w.write_u16(static_cast<uint16_t>(ExtensionType::renegotiation_info));
         w.write_u16(1); // extension data length
         w.write_u8(0);  // empty renegotiated_connection
+    }
+
+    // application_layer_protocol_negotiation (type 16) — RFC 7301
+    if (!alpn_protocols.empty()) {
+        w.write_u16(static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation));
+        // Compute protocol_name_list length: sum of (1 + name.size()) for each protocol
+        uint16_t list_len = 0;
+        for (size_t i = 0; i < alpn_protocols.size(); ++i)
+            list_len = static_cast<uint16_t>(list_len + 1 + alpn_protocols[i].size());
+        w.write_u16(static_cast<uint16_t>(2 + list_len)); // extension data length
+        w.write_u16(list_len);                             // protocol_name_list length
+        for (size_t i = 0; i < alpn_protocols.size(); ++i) {
+            w.write_u8(static_cast<uint8_t>(alpn_protocols[i].size()));
+            for (size_t j = 0; j < alpn_protocols[i].size(); ++j)
+                w.write_u8(static_cast<uint8_t>(alpn_protocols[i][j]));
+        }
     }
 
     // Patch total extensions length

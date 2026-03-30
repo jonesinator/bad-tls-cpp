@@ -180,6 +180,83 @@ void test_client_key_exchange_ecdhe() {
     static_assert(test());
 }
 
+void test_alpn_extension() {
+    constexpr auto test = [] {
+        // Build extensions with ALPN protocols
+        tls::TlsWriter<512> ext_w;
+        std::array<tls::NamedCurve, 1> curves = {tls::NamedCurve::secp256r1};
+        std::array<tls::SignatureAndHashAlgorithm, 1> sig_algs = {{
+            {tls::HashAlgorithm::sha256, tls::SignatureAlgorithm::ecdsa},
+        }};
+        std::array<std::string_view, 2> protos = {"h2", "http/1.1"};
+        tls::write_client_hello_extensions(ext_w, curves, sig_algs, {}, protos);
+
+        // Parse the extensions to find ALPN
+        auto data = ext_w.data();
+        tls::TlsReader r(data);
+        uint16_t total_ext_len = r.read_u16();
+        if (total_ext_len != data.size() - 2) throw "wrong total extensions length";
+
+        // Scan for ALPN extension (type 16)
+        bool found_alpn = false;
+        while (r.remaining() >= 4) {
+            uint16_t ext_type = r.read_u16();
+            uint16_t ext_len = r.read_u16();
+            if (ext_type == 16) {
+                found_alpn = true;
+                // Verify ALPN wire format
+                auto alpn_data = r.read_bytes(ext_len);
+                tls::TlsReader alpn_r(alpn_data);
+                uint16_t list_len = alpn_r.read_u16();
+                // list should contain: "h2" (1+2=3) + "http/1.1" (1+8=9) = 12 bytes
+                if (list_len != 12) throw "wrong protocol_name_list length";
+
+                // First protocol: "h2"
+                uint8_t p1_len = alpn_r.read_u8();
+                if (p1_len != 2) throw "wrong first protocol length";
+                auto p1 = alpn_r.read_bytes(2);
+                if (p1[0] != 'h' || p1[1] != '2') throw "wrong first protocol name";
+
+                // Second protocol: "http/1.1"
+                uint8_t p2_len = alpn_r.read_u8();
+                if (p2_len != 8) throw "wrong second protocol length";
+                auto p2 = alpn_r.read_bytes(8);
+                if (p2[0] != 'h' || p2[4] != '/' || p2[7] != '1') throw "wrong second protocol name";
+            } else {
+                if (ext_len > 0) r.read_bytes(ext_len);
+            }
+        }
+        if (!found_alpn) throw "ALPN extension not found";
+        return true;
+    };
+    static_assert(test());
+}
+
+void test_alpn_extension_omitted_when_empty() {
+    constexpr auto test = [] {
+        // Build extensions without ALPN protocols (backward compatibility)
+        tls::TlsWriter<512> ext_w;
+        std::array<tls::NamedCurve, 1> curves = {tls::NamedCurve::secp256r1};
+        std::array<tls::SignatureAndHashAlgorithm, 1> sig_algs = {{
+            {tls::HashAlgorithm::sha256, tls::SignatureAlgorithm::ecdsa},
+        }};
+        tls::write_client_hello_extensions(ext_w, curves, sig_algs);
+
+        // Scan for ALPN extension (type 16) — should not be present
+        auto data = ext_w.data();
+        tls::TlsReader r(data);
+        r.read_u16(); // total extensions length
+        while (r.remaining() >= 4) {
+            uint16_t ext_type = r.read_u16();
+            uint16_t ext_len = r.read_u16();
+            if (ext_type == 16) throw "ALPN extension should not be present";
+            if (ext_len > 0) r.read_bytes(ext_len);
+        }
+        return true;
+    };
+    static_assert(test());
+}
+
 int main() {
     test_client_hello_serialize();
     test_server_hello_parse();
@@ -187,5 +264,7 @@ int main() {
     test_server_key_exchange_ecdhe_parse();
     test_finished_roundtrip();
     test_client_key_exchange_ecdhe();
+    test_alpn_extension();
+    test_alpn_extension_omitted_when_empty();
     return 0;
 }

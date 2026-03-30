@@ -80,6 +80,7 @@ enum class AlertDescription : uint8_t {
     protocol_version        = 70,
     insufficient_security   = 71,
     internal_error          = 80,
+    no_application_protocol = 120,  // RFC 7301
 };
 
 // RFC 4492 Section 5.1.1
@@ -136,6 +137,7 @@ enum class ExtensionType : uint16_t {
     ec_point_formats     = 11,
     supported_groups     = 10,  // formerly "elliptic_curves"
     signature_algorithms = 13,
+    application_layer_protocol_negotiation = 16,  // RFC 7301
     extended_master_secret = 0x0017,  // RFC 7627
     renegotiation_info   = 0xFF01,  // RFC 5746
 };

@@ -52,6 +52,9 @@ struct dtls_client_config {
     std::span<const std::vector<uint8_t>> client_certificate_chain;
     tls_private_key client_private_key;
     NamedCurve client_key_curve = NamedCurve::secp256r1;
+
+    // ALPN protocol names (empty = don't send ALPN extension) — RFC 7301
+    std::span<const std::string_view> alpn_protocols;
 };
 
 template <transport Transport, random_generator RNG>
@@ -65,6 +68,7 @@ class dtls_client {
     CipherSuite negotiated_suite_{};
     std::array<uint8_t, 48> master_secret_{};
     bool handshake_complete_ = false;
+    std::string negotiated_protocol_;
     uint16_t next_send_seq_ = 0;  // outgoing handshake message_seq
 
 public:
@@ -79,7 +83,8 @@ public:
         write_client_hello_extensions(ext_w,
             std::span<const NamedCurve>(config_.curves.data(), config_.num_curves),
             std::span<const SignatureAndHashAlgorithm>(config_.sig_algs.data(), config_.num_sig_algs),
-            config_.hostname);
+            config_.hostname,
+            config_.alpn_protocols);
 
         // --- Phase 1: Send initial ClientHello (no cookie) ---
         DtlsClientHello ch{};
@@ -147,8 +152,22 @@ public:
                 while (ext_r.remaining() >= 4) {
                     uint16_t ext_type = ext_r.read_u16();
                     uint16_t ext_len = ext_r.read_u16();
-                    if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret))
+                    if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret)) {
                         use_ems = true;
+                    } else if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 4) {
+                        auto alpn_data = ext_r.read_bytes(ext_len);
+                        TlsReader alpn_r(alpn_data);
+                        uint16_t list_len = alpn_r.read_u16();
+                        if (list_len >= 2 && list_len <= alpn_r.remaining()) {
+                            uint8_t name_len = alpn_r.read_u8();
+                            if (name_len > 0 && name_len <= alpn_r.remaining()) {
+                                auto name_bytes = alpn_r.read_bytes(name_len);
+                                negotiated_protocol_.assign(
+                                    reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
+                            }
+                        }
+                        continue;
+                    }
                     if (ext_len > 0) ext_r.read_bytes(ext_len);
                 }
             }
@@ -180,8 +199,22 @@ public:
                 while (ext_r.remaining() >= 4) {
                     uint16_t ext_type = ext_r.read_u16();
                     uint16_t ext_len = ext_r.read_u16();
-                    if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret))
+                    if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret)) {
                         use_ems = true;
+                    } else if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 4) {
+                        auto alpn_data = ext_r.read_bytes(ext_len);
+                        TlsReader alpn_r(alpn_data);
+                        uint16_t list_len = alpn_r.read_u16();
+                        if (list_len >= 2 && list_len <= alpn_r.remaining()) {
+                            uint8_t name_len = alpn_r.read_u8();
+                            if (name_len > 0 && name_len <= alpn_r.remaining()) {
+                                auto name_bytes = alpn_r.read_bytes(name_len);
+                                negotiated_protocol_.assign(
+                                    reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
+                            }
+                        }
+                        continue;
+                    }
                     if (ext_len > 0) ext_r.read_bytes(ext_len);
                 }
             }
@@ -240,6 +273,7 @@ public:
 
     bool is_connected() const { return handshake_complete_; }
     CipherSuite negotiated_suite() const { return negotiated_suite_; }
+    std::string_view negotiated_protocol() const { return negotiated_protocol_; }
 
 private:
     template <typename Num>
