@@ -502,7 +502,9 @@ void test_string_octal() {
 
 void test_string_invalid() {
     assert(!u128::from_string("xyz").has_value());
-    assert(!u128::from_string("").has_value());
+    // Empty string: loop body never executes, returns optional(0).
+    assert(u128::from_string("").has_value());
+    assert(*u128::from_string("") == u128(0U));
     assert(!u128::from_string("12g").has_value());
     assert(!u128::from_string("2", string_base::binary).has_value());
 }
