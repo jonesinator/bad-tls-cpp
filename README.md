@@ -342,6 +342,8 @@ The test suite is comprehensive:
 | `test_der_primitives.cpp` | DER encode/decode roundtrips for all primitive types |
 | `test_der_codegen.cpp` | Type generation, field access, encode/decode of generated types |
 | `test_pem.cpp` | PEM encoding/decoding, line wrapping, labels |
+| `test_number.cpp` | Fixed-width big integer arithmetic, shifts, bitwise ops, modular inverse, GCD, pow_mod, byte/string conversion, edge cases (overflow, underflow, division by zero) |
+| `test_sha2.cpp` | All 6 SHA-2 variants against NIST FIPS 180-4 vectors, streaming/multi-update, block boundary padding, constexpr evaluation, state reuse |
 | `test_ecc.cpp` | Generator point validation, point arithmetic on P-256 and secp256k1 |
 | `test_ecdsa.cpp` | Signing, verification, RFC 6979, SHA-256/384/512, HMAC, OpenSSL interop |
 | `test_ecdh.cpp` | Keypair derivation, validation, shared secret, HKDF integration |
