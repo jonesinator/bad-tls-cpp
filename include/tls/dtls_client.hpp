@@ -75,6 +75,7 @@ class dtls_client {
     bool handshake_complete_ = false;
     std::string negotiated_protocol_;
     SessionId server_hello_session_id_{};
+    bool server_will_send_ticket_ = false;
     uint16_t next_send_seq_ = 0;  // outgoing handshake message_seq
 
 public:
@@ -164,6 +165,10 @@ public:
                     uint16_t ext_len = ext_r.read_u16();
                     if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret)) {
                         use_ems = true;
+                    } else if (ext_type == static_cast<uint16_t>(ExtensionType::session_ticket)) {
+                        server_will_send_ticket_ = true;
+                        if (ext_len > 0) ext_r.read_bytes(ext_len);
+                        continue;
                     } else if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 4) {
                         auto alpn_data = ext_r.read_bytes(ext_len);
                         TlsReader alpn_r(alpn_data);
@@ -219,6 +224,10 @@ public:
                     uint16_t ext_len = ext_r.read_u16();
                     if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret)) {
                         use_ems = true;
+                    } else if (ext_type == static_cast<uint16_t>(ExtensionType::session_ticket)) {
+                        server_will_send_ticket_ = true;
+                        if (ext_len > 0) ext_r.read_bytes(ext_len);
+                        continue;
                     } else if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 4) {
                         auto alpn_data = ext_r.read_bytes(ext_len);
                         TlsReader alpn_r(alpn_data);
@@ -517,13 +526,27 @@ private:
         if (!fin_err) return {fin_err.error};
 
         // --- Receive server ChangeCipherSpec ---
-        // Skip retransmitted server flight records (epoch 0 handshake)
+        // Skip retransmitted server flight records (epoch 0 handshake).
+        // If the server sends NewSessionTicket (RFC 5077), add it to the
+        // transcript so Finished verify_data computation matches.
         while (true) {
             auto server_ccs = rio_.recv_record();
             if (!server_ccs) return {server_ccs.error};
             if (server_ccs.value.type == ContentType::change_cipher_spec) break;
             if (server_ccs.value.type == ContentType::handshake &&
-                server_ccs.value.epoch == 0) continue;
+                server_ccs.value.epoch == 0) {
+                // Check for NewSessionTicket — must be added to transcript
+                auto frag = std::span<const uint8_t>(
+                    server_ccs.value.fragment.data.data(), server_ccs.value.fragment.size());
+                if (frag.size() >= 12) {
+                    auto msg_type = static_cast<HandshakeType>(frag[0]);
+                    if (msg_type == HandshakeType::new_session_ticket) {
+                        // Add full DTLS handshake message (12-byte header + body) to transcript
+                        transcript.update(frag);
+                    }
+                }
+                continue;
+            }
             return {tls_error::unexpected_message};
         }
 
@@ -584,13 +607,27 @@ private:
         auto kb = derive_key_block<Hash>(master_secret_, client_random_, server_random_, params);
 
         // --- Receive server ChangeCipherSpec ---
-        // Skip retransmitted server flight records (epoch 0 handshake)
+        // Skip retransmitted server flight records (epoch 0 handshake).
+        // If the server sends NewSessionTicket (RFC 5077), add it to the
+        // transcript so Finished verify_data computation matches.
         while (true) {
             auto server_ccs = rio_.recv_record();
             if (!server_ccs) return {server_ccs.error};
             if (server_ccs.value.type == ContentType::change_cipher_spec) break;
             if (server_ccs.value.type == ContentType::handshake &&
-                server_ccs.value.epoch == 0) continue;
+                server_ccs.value.epoch == 0) {
+                // Check for NewSessionTicket — must be added to transcript
+                auto frag = std::span<const uint8_t>(
+                    server_ccs.value.fragment.data.data(), server_ccs.value.fragment.size());
+                if (frag.size() >= 12) {
+                    auto msg_type = static_cast<HandshakeType>(frag[0]);
+                    if (msg_type == HandshakeType::new_session_ticket) {
+                        // Add full DTLS handshake message (12-byte header + body) to transcript
+                        transcript.update(frag);
+                    }
+                }
+                continue;
+            }
             return {tls_error::unexpected_message};
         }
 
