@@ -47,13 +47,16 @@ using Certificate = der::Mapped<X509Mod, X509Mod.find_type("Certificate")>;
 using rsa_num = number<uint32_t, 256>;  // RSA-4096 backing (8192-bit)
 using uint512 = number<uint32_t, 16>;
 using uint768 = number<uint32_t, 24>;
+using uint1056 = number<uint32_t, 33>;
 using p256_curve = p256<uint512>;
 using p384_curve = p384<uint768>;
+using p521_curve = p521<uint1056>;
 
 using x509_public_key = std::variant<
     rsa_public_key<rsa_num>,
     point<p256_curve>,
-    point<p384_curve>
+    point<p384_curve>,
+    point<p521_curve>
 >;
 
 // --- Verifier framework ---
@@ -162,6 +165,16 @@ inline auto extract_public_key(const Certificate& cert) -> x509_public_key {
             auto y = uint768::from_bytes(pub_span.subspan(49, 48));
             using fe = field_element<p384_curve>;
             return point<p384_curve>{fe{x}, fe{y}};
+        }
+
+        if (curve_oid == "1.3.132.0.35") {
+            // P-521 (secp521r1): 0x04 || x(66) || y(66)
+            if (pub_span.size() != 133 || pub_span[0] != 0x04)
+                throw std::runtime_error{"invalid P-521 public key"};
+            auto x = uint1056::from_bytes(pub_span.subspan(1, 66));
+            auto y = uint1056::from_bytes(pub_span.subspan(67, 66));
+            using fe = field_element<p521_curve>;
+            return point<p521_curve>{fe{x}, fe{y}};
         }
 
         throw std::runtime_error{"unsupported EC curve: " + std::string(curve_oid)};
@@ -287,7 +300,7 @@ inline bool verify_certificate_signature(
         return false;
     }
 
-    // ECDSA + SHA-256 (P-256 or P-384 key)
+    // ECDSA + SHA-256 (P-256, P-384, or P-521 key)
     if (sig_oid == "1.2.840.10045.4.3.2") {
         auto hash = sha256(tbs_bytes);
         if (auto* key = std::get_if<point<p256_curve>>(&issuer_key)) {
@@ -298,10 +311,14 @@ inline bool verify_certificate_signature(
             auto sig = detail::parse_ecdsa_signature<p384_curve>(sig_bits.bytes);
             return ecdsa_verify<p384_curve, sha256_state>(*key, hash, sig);
         }
+        if (auto* key = std::get_if<point<p521_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p521_curve>(sig_bits.bytes);
+            return ecdsa_verify<p521_curve, sha256_state>(*key, hash, sig);
+        }
         return false;
     }
 
-    // ECDSA + SHA-384 (P-256 or P-384 key)
+    // ECDSA + SHA-384 (P-256, P-384, or P-521 key)
     if (sig_oid == "1.2.840.10045.4.3.3") {
         auto hash = sha384(tbs_bytes);
         if (auto* key = std::get_if<point<p384_curve>>(&issuer_key)) {
@@ -311,6 +328,28 @@ inline bool verify_certificate_signature(
         if (auto* key = std::get_if<point<p256_curve>>(&issuer_key)) {
             auto sig = detail::parse_ecdsa_signature<p256_curve>(sig_bits.bytes);
             return ecdsa_verify<p256_curve, sha384_state>(*key, hash, sig);
+        }
+        if (auto* key = std::get_if<point<p521_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p521_curve>(sig_bits.bytes);
+            return ecdsa_verify<p521_curve, sha384_state>(*key, hash, sig);
+        }
+        return false;
+    }
+
+    // ECDSA + SHA-512 (P-521 key, also P-256/P-384 for cross-signed certs)
+    if (sig_oid == "1.2.840.10045.4.3.4") {
+        auto hash = sha512(tbs_bytes);
+        if (auto* key = std::get_if<point<p521_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p521_curve>(sig_bits.bytes);
+            return ecdsa_verify<p521_curve, sha512_state>(*key, hash, sig);
+        }
+        if (auto* key = std::get_if<point<p384_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p384_curve>(sig_bits.bytes);
+            return ecdsa_verify<p384_curve, sha512_state>(*key, hash, sig);
+        }
+        if (auto* key = std::get_if<point<p256_curve>>(&issuer_key)) {
+            auto sig = detail::parse_ecdsa_signature<p256_curve>(sig_bits.bytes);
+            return ecdsa_verify<p256_curve, sha512_state>(*key, hash, sig);
         }
         return false;
     }

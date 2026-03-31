@@ -121,7 +121,8 @@ int main(int argc, char* argv[]) {
             std::printf("Client key type: RSA\n");
         else
             std::printf("Client key type: EC (%s)\n",
-                client_loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" : "P-384");
+                client_loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" :
+                client_loaded.curve == tls::NamedCurve::secp384r1 ? "P-384" : "P-521");
     }
 
     std::printf("Connecting to %s:%u...\n", hostname.c_str(), port);

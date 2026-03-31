@@ -163,7 +163,7 @@ Complete RFC 4648 codec supporting Base16, Base32, Base32hex, Base64, and Base64
 
 - **`field_element<TCurve>`**: A number that automatically reduces modulo the curve's prime `p` on every operation. Parameterized on a curve type that provides constants (p, a, b, Gx, Gy, n).
 - **`point<TCurve>`**: An affine point on the curve with addition, doubling, scalar multiplication (double-and-add), infinity representation, on-curve validation, and serialization (uncompressed format: `0x04 || x || y`).
-- Supported curves: **P-256** (NIST), **P-384** (NIST), and **secp256k1** (Bitcoin).
+- Supported curves: **P-256** (NIST), **P-384** (NIST), **P-521** (NIST), and **secp256k1** (Bitcoin).
 
 ### X25519 Key Exchange (`crypto/x25519.hpp`)
 
@@ -244,7 +244,7 @@ The TLS module implements TLS 1.2 client and server (RFC 5246): types, binary se
 
 ### Wire Types (`tls/types.hpp`)
 
-Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (X25519, P-256, P-384), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths.
+Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (X25519, P-256, P-384, P-521), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths.
 
 ### Record Layer (`tls/record.hpp`)
 
@@ -296,7 +296,7 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 ### Private Key Loading (`tls/private_key.hpp`)
 
-Loads EC and RSA private keys from PEM files. EC keys: handles SEC 1 format (`EC PRIVATE KEY`, RFC 5915) and PKCS#8 (`PRIVATE KEY`, RFC 5958), auto-detects curve from key byte length. RSA keys: handles PKCS#1 format (`RSA PRIVATE KEY`) and PKCS#8 (`PRIVATE KEY` with RSA OID). The unified `load_private_key()` auto-detects key type from PEM label and PKCS#8 algorithm OID. Returns a `loaded_key` with a `tls_private_key` variant (P-256, P-384, or RSA) and detected key type.
+Loads EC and RSA private keys from PEM files. EC keys: handles SEC 1 format (`EC PRIVATE KEY`, RFC 5915) and PKCS#8 (`PRIVATE KEY`, RFC 5958), auto-detects curve from key byte length. RSA keys: handles PKCS#1 format (`RSA PRIVATE KEY`) and PKCS#8 (`PRIVATE KEY` with RSA OID). The unified `load_private_key()` auto-detects key type from PEM label and PKCS#8 algorithm OID. Returns a `loaded_key` with a `tls_private_key` variant (P-256, P-384, P-521, or RSA) and detected key type.
 
 ### TCP Transport (`tls/tcp_transport.hpp`)
 

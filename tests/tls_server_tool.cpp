@@ -113,7 +113,8 @@ int main(int argc, char* argv[]) {
         std::printf("Key type: RSA\n");
     else
         std::printf("Key type: EC (%s)\n",
-            loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" : "P-384");
+            loaded.curve == tls::NamedCurve::secp256r1 ? "P-256" :
+            loaded.curve == tls::NamedCurve::secp384r1 ? "P-384" : "P-521");
 
     // Load client CA trust store (if mTLS)
     asn1::x509::trust_store client_ca_store;

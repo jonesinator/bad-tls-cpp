@@ -346,19 +346,27 @@ inline bool verify_server_key_exchange(
     }
 
     if (ske.sig_algorithm.signature == SignatureAlgorithm::ecdsa) {
+        auto sig_span = std::span<const uint8_t>(ske.signature.data.data(), ske.signature.len);
         if (ske.sig_algorithm.hash == HashAlgorithm::sha256) {
-            auto* key = std::get_if<point<asn1::x509::p256_curve>>(&server_pub_key);
-            if (!key) return false;
-            auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p256_curve>(
-                std::span<const uint8_t>(ske.signature.data.data(), ske.signature.len));
-            return ecdsa_verify<asn1::x509::p256_curve, sha256_state>(*key, sha256(data_span), sig);
+            if (auto* key = std::get_if<point<asn1::x509::p256_curve>>(&server_pub_key)) {
+                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p256_curve>(sig_span);
+                return ecdsa_verify<asn1::x509::p256_curve, sha256_state>(*key, sha256(data_span), sig);
+            }
+            return false;
         }
         if (ske.sig_algorithm.hash == HashAlgorithm::sha384) {
-            auto* key = std::get_if<point<asn1::x509::p384_curve>>(&server_pub_key);
-            if (!key) return false;
-            auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p384_curve>(
-                std::span<const uint8_t>(ske.signature.data.data(), ske.signature.len));
-            return ecdsa_verify<asn1::x509::p384_curve, sha384_state>(*key, sha384(data_span), sig);
+            if (auto* key = std::get_if<point<asn1::x509::p384_curve>>(&server_pub_key)) {
+                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p384_curve>(sig_span);
+                return ecdsa_verify<asn1::x509::p384_curve, sha384_state>(*key, sha384(data_span), sig);
+            }
+            return false;
+        }
+        if (ske.sig_algorithm.hash == HashAlgorithm::sha512) {
+            if (auto* key = std::get_if<point<asn1::x509::p521_curve>>(&server_pub_key)) {
+                auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p521_curve>(sig_span);
+                return ecdsa_verify<asn1::x509::p521_curve, sha512_state>(*key, sha512(data_span), sig);
+            }
+            return false;
         }
         return false;
     }
@@ -369,7 +377,7 @@ inline bool verify_server_key_exchange(
 // --- ECDH exchange ---
 
 struct pre_master_secret {
-    std::array<uint8_t, 48> data{};
+    std::array<uint8_t, 66> data{};  // P-521 needs 66 bytes
     size_t length = 0;
 };
 
@@ -466,6 +474,8 @@ tls_result<ecdh_exchange_result> compute_ecdh_exchange(
         return detail::compute_ecdh_exchange_impl<asn1::x509::p256_curve>(server_point_bytes, rng);
     if (curve == NamedCurve::secp384r1)
         return detail::compute_ecdh_exchange_impl<asn1::x509::p384_curve>(server_point_bytes, rng);
+    if (curve == NamedCurve::secp521r1)
+        return detail::compute_ecdh_exchange_impl<asn1::x509::p521_curve>(server_point_bytes, rng);
     if (curve == NamedCurve::x25519)
         return detail::compute_x25519_exchange_impl(server_point_bytes, rng);
     return {{}, tls_error::unsupported_curve};

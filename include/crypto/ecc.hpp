@@ -362,4 +362,57 @@ struct p384 {
     }
 };
 
+/**
+ * Curve parameters for P-521 / secp521r1 (y^2 = x^3 - 3x + b over F_p).
+ *
+ * @tparam TNumber The underlying number type. Must be wide enough to hold the product of two
+ *                 521-bit field elements (i.e. at least 1042 bits).
+ */
+template <typename TNumber>
+struct p521 {
+    using number_type = TNumber;
+
+    static number_type p() {
+        return *number_type::from_string(
+            "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+            string_base::hexadecimal);
+    }
+
+    static number_type a() {
+        return *number_type::from_string(
+            "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC",
+            string_base::hexadecimal);
+    }
+
+    static number_type b() {
+        return *number_type::from_string(
+            "0051953EB9618E1C9A1F929A21A0B68540EEA2DA725B99B315F3B8B489918EF1"
+            "09E156193951EC7E937B1652C0BD3BB1BF073573DF883D2C34F1EF451FD46B503F00",
+            string_base::hexadecimal);
+    }
+
+    static number_type gx() {
+        return *number_type::from_string(
+            "00C6858E06B70404E9CD9E3ECB662395B4429C648139053FB521F828AF606B4D"
+            "3DBAA14B5E77EFE75928FE1DC127A2FFA8DE3348B3C1856A429BF97E7E31C2E5BD66",
+            string_base::hexadecimal);
+    }
+
+    static number_type gy() {
+        return *number_type::from_string(
+            "011839296A789A3BC0045C8A5FB42C7D1BD998F54449579B446817AFBD17273E"
+            "662C97EE72995EF42640C550B9013FAD0761353C7086A272C24088BE94769FD16650",
+            string_base::hexadecimal);
+    }
+
+    static number_type n() {
+        return *number_type::from_string(
+            "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+            "FFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409",
+            string_base::hexadecimal);
+    }
+};
+
 #endif /* ECC_HPP_ */

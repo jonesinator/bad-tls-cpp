@@ -30,6 +30,7 @@ namespace tls {
 using rsa_num = number<uint32_t, 256>;
 using p256_curve = p256<number<uint32_t, 16>>;
 using p384_curve = p384<number<uint32_t, 24>>;
+using p521_curve = p521<number<uint32_t, 33>>;
 
 namespace detail {
     constexpr char ecc_asn1[] = {
@@ -42,12 +43,14 @@ namespace detail {
 
 using ec_private_key = std::variant<
     p256_curve::number_type,   // P-256 scalar
-    p384_curve::number_type    // P-384 scalar
+    p384_curve::number_type,   // P-384 scalar
+    p521_curve::number_type    // P-521 scalar
 >;
 
 using tls_private_key = std::variant<
     p256_curve::number_type,   // P-256 scalar
     p384_curve::number_type,   // P-384 scalar
+    p521_curve::number_type,   // P-521 scalar
     rsa_private_key<rsa_num>   // RSA private key
 >;
 
@@ -64,6 +67,8 @@ struct loaded_key {
         if (auto* p = std::get_if<p256_curve::number_type>(&key))
             return *p;
         if (auto* p = std::get_if<p384_curve::number_type>(&key))
+            return *p;
+        if (auto* p = std::get_if<p521_curve::number_type>(&key))
             return *p;
         throw std::runtime_error{"key is not EC"};
     }
@@ -173,6 +178,13 @@ inline loaded_key load_ec_private_key(std::string_view pem_text) {
             priv_bytes.insert(priv_bytes.begin(), 0);
         auto d = p384_curve::number_type::from_bytes(priv_bytes);
         return {tls_private_key{d}, NamedCurve::secp384r1, key_type::ec};
+    }
+
+    if (priv_bytes.size() <= 66) {
+        while (priv_bytes.size() < 66)
+            priv_bytes.insert(priv_bytes.begin(), 0);
+        auto d = p521_curve::number_type::from_bytes(priv_bytes);
+        return {tls_private_key{d}, NamedCurve::secp521r1, key_type::ec};
     }
 
     throw std::runtime_error{"unsupported EC key size"};

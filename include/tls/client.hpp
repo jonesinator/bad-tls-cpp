@@ -36,18 +36,19 @@ struct client_config {
     };
     size_t num_cipher_suites = 6;
 
-    std::array<NamedCurve, 3> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1};
-    size_t num_curves = 3;
+    std::array<NamedCurve, 4> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1, NamedCurve::secp521r1};
+    size_t num_curves = 4;
 
-    std::array<SignatureAndHashAlgorithm, 6> sig_algs = {{
+    std::array<SignatureAndHashAlgorithm, 7> sig_algs = {{
         {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa},
         {HashAlgorithm::sha384, SignatureAlgorithm::ecdsa},
+        {HashAlgorithm::sha512, SignatureAlgorithm::ecdsa},
         {HashAlgorithm::rsa_pss, SignatureAlgorithm(4)},   // rsa_pss_rsae_sha256
         {HashAlgorithm::rsa_pss, SignatureAlgorithm(5)},   // rsa_pss_rsae_sha384
         {HashAlgorithm::sha256, SignatureAlgorithm::rsa},   // PKCS#1v1.5 fallback
         {HashAlgorithm::sha384, SignatureAlgorithm::rsa},
     }};
-    size_t num_sig_algs = 6;
+    size_t num_sig_algs = 7;
 
     // Optional trust store for certificate chain verification (nullptr to skip)
     const asn1::x509::trust_store* trust = nullptr;
@@ -475,6 +476,10 @@ private:
                     auto* d = std::get_if<asn1::x509::p256_curve::number_type>(&config_.client_private_key);
                     if (!d) return {tls_error::internal_error};
                     encode_sig(ecdsa_sign<asn1::x509::p256_curve, Hash>(*d, cv_hash));
+                } else if (config_.client_key_curve == NamedCurve::secp521r1) {
+                    auto* d = std::get_if<asn1::x509::p521_curve::number_type>(&config_.client_private_key);
+                    if (!d) return {tls_error::internal_error};
+                    encode_sig(ecdsa_sign<asn1::x509::p521_curve, Hash>(*d, cv_hash));
                 } else {
                     auto* d = std::get_if<asn1::x509::p384_curve::number_type>(&config_.client_private_key);
                     if (!d) return {tls_error::internal_error};
