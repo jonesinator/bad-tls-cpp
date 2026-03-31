@@ -474,6 +474,93 @@ run_test "curl CHACHA20 RSA -> our server" "Hello, world!" \
 
 stop_server
 
+# ========== Test: RSA-PSS signed certificates ==========
+echo ""
+echo "=== Generating RSA-PSS test PKI ==="
+
+# RSA-PSS CA: self-signed with PSS padding
+openssl genrsa -traditional -out "$TMPDIR/pss_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/pss_ca_key.pem" -out "$TMPDIR/pss_ca.pem" \
+    -days 1 -subj "/CN=RSA-PSS Test CA" -sha256 \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+
+# RSA-PSS server cert signed by PSS CA
+openssl genrsa -traditional -out "$TMPDIR/pss_server_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/pss_server_key.pem" -out "$TMPDIR/pss_server.csr" \
+    -subj "/CN=localhost" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/pss_server.csr" -CA "$TMPDIR/pss_ca.pem" \
+    -CAkey "$TMPDIR/pss_ca_key.pem" -CAcreateserial -out "$TMPDIR/pss_server.pem" \
+    -days 1 -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+    -extfile "$TMPDIR/ext.cnf" -extensions v3_req 2>/dev/null
+
+cat "$TMPDIR/pss_server.pem" "$TMPDIR/pss_ca.pem" > "$TMPDIR/pss_chain.pem"
+
+# RSA-PSS client CA and client cert for mTLS
+openssl genrsa -traditional -out "$TMPDIR/pss_client_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/pss_client_ca_key.pem" -out "$TMPDIR/pss_client_ca.pem" \
+    -days 1 -subj "/CN=RSA-PSS Client CA" -sha256 \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+
+openssl genrsa -traditional -out "$TMPDIR/pss_client_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/pss_client_key.pem" -out "$TMPDIR/pss_client.csr" \
+    -subj "/CN=RSA-PSS Test Client" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/pss_client.csr" -CA "$TMPDIR/pss_client_ca.pem" \
+    -CAkey "$TMPDIR/pss_client_ca_key.pem" -CAcreateserial -out "$TMPDIR/pss_client.pem" \
+    -days 1 -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+cat "$TMPDIR/pss_client.pem" "$TMPDIR/pss_client_ca.pem" > "$TMPDIR/pss_client_chain.pem"
+
+for SUITE in ECDHE-RSA-AES128-GCM-SHA256 ECDHE-RSA-AES256-GCM-SHA384; do
+    echo ""
+    echo "=== Test: RSA-PSS cert TLS ($SUITE) ==="
+    PORT=$(get_port 14450)
+    start_server "$PORT" "$TMPDIR/pss_chain.pem" "$TMPDIR/pss_server_key.pem"
+
+    run_test "curl PSS $SUITE -> Hello, world!" "Hello, world!" \
+        curl -s --cacert "$TMPDIR/pss_ca.pem" --tlsv1.2 --tls-max 1.2 \
+        --ciphers "$SUITE" "https://localhost:$PORT/"
+
+    run_test "tls_connect_tool PSS -> Hello, world!" "Hello, world!" \
+        "$CLIENT_TOOL" --cafile "$TMPDIR/pss_ca.pem" localhost "$PORT"
+
+    stop_server
+done
+
+# ========== Test: RSA-PSS server + mTLS with PSS client cert ==========
+echo ""
+echo "=== Test: RSA-PSS server + RSA-PSS client mTLS ==="
+PORT=$(get_port 14451)
+start_server "$PORT" --client-ca "$TMPDIR/pss_client_ca.pem" \
+    "$TMPDIR/pss_chain.pem" "$TMPDIR/pss_server_key.pem"
+
+run_test "PSS client cert with PSS server -> Hello, secure!" "Hello, secure!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/pss_ca.pem" \
+    --cert "$TMPDIR/pss_client_chain.pem" --key "$TMPDIR/pss_client_key.pem" \
+    localhost "$PORT"
+
+stop_server
+
+# ========== Test: RSA-PSS server + openssl s_client ==========
+echo ""
+echo "=== Test: RSA-PSS cert with openssl s_client ==="
+PORT=$(get_port 14452)
+start_server "$PORT" "$TMPDIR/pss_chain.pem" "$TMPDIR/pss_server_key.pem"
+
+TOTAL=$((TOTAL + 1))
+printf "  %-55s " "openssl s_client -> PSS server"
+output=$(printf 'GET / HTTP/1.0\r\n\r\n' | \
+    openssl s_client -connect "localhost:$PORT" -CAfile "$TMPDIR/pss_ca.pem" \
+    -tls1_2 2>&1)
+if echo "$output" | grep -q "Verify return code: 0"; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL"
+    echo "$output" | grep -E "Verify|error" | head -5 | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+fi
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

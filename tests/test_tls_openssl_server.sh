@@ -196,6 +196,81 @@ run_test "TLS X25519 key exchange" "HTTP" \
 
 stop_server
 
+# ========== Test: RSA-PSS signed certificates (our client → openssl s_server) ==========
+echo ""
+echo "=== Generating RSA-PSS test PKI ==="
+
+# RSA-PSS CA: self-signed with PSS padding
+openssl genrsa -traditional -out "$TMPDIR/pss_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/pss_ca_key.pem" -out "$TMPDIR/pss_ca.pem" \
+    -days 1 -subj "/CN=RSA-PSS Test CA" -sha256 \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+
+# RSA-PSS server cert signed by PSS CA
+openssl genrsa -traditional -out "$TMPDIR/pss_server_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/pss_server_key.pem" -out "$TMPDIR/pss_server.csr" \
+    -subj "/CN=localhost" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/pss_server.csr" -CA "$TMPDIR/pss_ca.pem" \
+    -CAkey "$TMPDIR/pss_ca_key.pem" -CAcreateserial -out "$TMPDIR/pss_server.pem" \
+    -days 1 -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+    -extfile "$TMPDIR/ext.cnf" -extensions v3_req 2>/dev/null
+
+cat "$TMPDIR/pss_server.pem" "$TMPDIR/pss_ca.pem" > "$TMPDIR/pss_chain.pem"
+
+# RSA-PSS client CA and client cert for mTLS
+openssl genrsa -traditional -out "$TMPDIR/pss_client_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/pss_client_ca_key.pem" -out "$TMPDIR/pss_client_ca.pem" \
+    -days 1 -subj "/CN=RSA-PSS Client CA" -sha256 \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+
+openssl genrsa -traditional -out "$TMPDIR/pss_client_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/pss_client_key.pem" -out "$TMPDIR/pss_client.csr" \
+    -subj "/CN=RSA-PSS Test Client" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/pss_client.csr" -CA "$TMPDIR/pss_client_ca.pem" \
+    -CAkey "$TMPDIR/pss_client_ca_key.pem" -CAcreateserial -out "$TMPDIR/pss_client.pem" \
+    -days 1 -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+cat "$TMPDIR/pss_client.pem" "$TMPDIR/pss_client_ca.pem" > "$TMPDIR/pss_client_chain.pem"
+
+start_openssl_pss_server() {
+    local port="$1"
+    shift
+    openssl s_server \
+        -cert "$TMPDIR/pss_chain.pem" -key "$TMPDIR/pss_server_key.pem" \
+        -port "$port" -tls1_2 -www \
+        "$@" \
+        > "$TMPDIR/server.log" 2>&1 &
+    SERVER_PID=$!
+    sleep 1
+    if ! kill -0 $SERVER_PID 2>/dev/null; then
+        echo "ERROR: openssl s_server (PSS) failed to start"
+        cat "$TMPDIR/server.log"
+        exit 1
+    fi
+}
+
+echo ""
+echo "=== Test: RSA-PSS cert (our client → openssl s_server) ==="
+PORT=$(get_port 14449)
+start_openssl_pss_server "$PORT" -cipher ECDHE-RSA-AES128-GCM-SHA256
+
+run_test "TLS RSA-PSS cert ECDHE-RSA-AES128" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/pss_ca.pem" localhost "$PORT"
+
+stop_server
+
+echo ""
+echo "=== Test: RSA-PSS cert mTLS (our client → openssl s_server) ==="
+PORT=$(get_port 14450)
+start_openssl_pss_server "$PORT" -Verify 1 -CAfile "$TMPDIR/pss_client_ca.pem" \
+    -cipher ECDHE-RSA-AES128-GCM-SHA256
+
+run_test "mTLS RSA-PSS cert + PSS client cert" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/pss_ca.pem" \
+    --cert "$TMPDIR/pss_client_chain.pem" --key "$TMPDIR/pss_client_key.pem" \
+    localhost "$PORT"
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

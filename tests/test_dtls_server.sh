@@ -348,6 +348,90 @@ run_test "dtls_x25519_self_rsa" "pass" \
 kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
 
 # ============================================================
+# RSA-PSS signed certificate tests
+# ============================================================
+
+echo ""
+echo "=== Generating RSA-PSS test PKI ==="
+
+# RSA-PSS CA: self-signed with PSS padding
+openssl genrsa -out "$TMPDIR/pss_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/pss_ca_key.pem" -out "$TMPDIR/pss_ca.pem" \
+    -days 1 -subj "/CN=RSA-PSS Test CA" -sha256 \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+
+# RSA-PSS server cert signed by PSS CA
+openssl genrsa -out "$TMPDIR/pss_server_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/pss_server_key.pem" -out "$TMPDIR/pss_server.csr" \
+    -subj "/CN=localhost" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/pss_server.csr" -CA "$TMPDIR/pss_ca.pem" \
+    -CAkey "$TMPDIR/pss_ca_key.pem" -CAcreateserial -out "$TMPDIR/pss_server.pem" \
+    -days 1 -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+    -extfile "$TMPDIR/ext.cnf" -extensions v3_req 2>/dev/null
+
+cat "$TMPDIR/pss_server.pem" "$TMPDIR/pss_ca.pem" > "$TMPDIR/pss_chain.pem"
+
+# RSA-PSS client CA and client cert for mTLS
+openssl genrsa -out "$TMPDIR/pss_client_ca_key.pem" 2048 2>/dev/null
+openssl req -x509 -new -key "$TMPDIR/pss_client_ca_key.pem" -out "$TMPDIR/pss_client_ca.pem" \
+    -days 1 -subj "/CN=RSA-PSS Client CA" -sha256 \
+    -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+
+openssl genrsa -out "$TMPDIR/pss_client_key.pem" 2048 2>/dev/null
+openssl req -new -key "$TMPDIR/pss_client_key.pem" -out "$TMPDIR/pss_client.csr" \
+    -subj "/CN=RSA-PSS Test Client" -sha256 2>/dev/null
+openssl x509 -req -in "$TMPDIR/pss_client.csr" -CA "$TMPDIR/pss_client_ca.pem" \
+    -CAkey "$TMPDIR/pss_client_ca_key.pem" -CAcreateserial -out "$TMPDIR/pss_client.pem" \
+    -days 1 -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 2>/dev/null
+cat "$TMPDIR/pss_client.pem" "$TMPDIR/pss_client_ca.pem" > "$TMPDIR/pss_client_chain.pem"
+
+echo ""
+echo "=== Test: DTLS with RSA-PSS server cert (self-interop) ==="
+
+PORT=$(get_port 14450)
+$SERVER_TOOL "$TMPDIR/pss_chain.pem" "$TMPDIR/pss_server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_pss_server" "pass" \
+    timeout 10 $CLIENT_TOOL --cafile "$TMPDIR/pss_ca.pem" localhost "$PORT"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+sleep 0.5
+
+echo ""
+echo "=== Test: DTLS mTLS with RSA-PSS client cert on PSS server ==="
+
+PORT=$(get_port 14451)
+$SERVER_TOOL --client-ca "$TMPDIR/pss_client_ca.pem" --require-client-cert \
+    "$TMPDIR/pss_chain.pem" "$TMPDIR/pss_server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_pss_mtls" "pass" \
+    timeout 10 $CLIENT_TOOL --cafile "$TMPDIR/pss_ca.pem" \
+        --cert "$TMPDIR/pss_client_chain.pem" --key "$TMPDIR/pss_client_key.pem" \
+        localhost "$PORT"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+sleep 0.5
+
+echo ""
+echo "=== Test: OpenSSL s_client vs our DTLS server (RSA-PSS cert) ==="
+
+PORT=$(get_port 14452)
+$SERVER_TOOL "$TMPDIR/pss_chain.pem" "$TMPDIR/pss_server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_openssl_client_pss" "pass" \
+    bash -c "echo 'hello' | timeout 12 openssl s_client -dtls1_2 \
+        -connect 127.0.0.1:$PORT -CAfile '$TMPDIR/pss_ca.pem' 2>&1 \
+        | grep -q 'Verify return code: 0'"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+
+# ============================================================
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
