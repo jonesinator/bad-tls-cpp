@@ -460,9 +460,10 @@ private:
         // --- Send ServerHello ---
         server_random_ = random_bytes<32>(rng_);
 
-        // Generate session ID for caching (if cache configured)
+        // Generate session ID for caching (if cache or ticket key configured)
+        // RFC 5077 §3.4: server SHOULD send a new session_id even for ticket-only mode
         SessionId new_session_id{};
-        if (config_.session_store) {
+        if (config_.session_store || config_.session_ticket_key) {
             new_session_id.data = random_bytes<32>(rng_);
             new_session_id.length = 32;
         }
@@ -842,11 +843,19 @@ private:
         master_secret_ = cached.master_secret;
         server_random_ = random_bytes<32>(rng_);
 
-        // --- Send ServerHello echoing session_id ---
+        // --- Send ServerHello ---
+        // For ticket resumption (RFC 5077 §3.4): generate a new session_id
+        // even though the ticket doesn't contain one.
+        SessionId resume_session_id = cached.session_id;
+        if (resume_session_id.length == 0) {
+            resume_session_id.data = random_bytes<32>(rng_);
+            resume_session_id.length = 32;
+        }
+
         ServerHello sh{};
         sh.server_version = TLS_1_2;
         sh.random = server_random_;
-        sh.session_id = cached.session_id;
+        sh.session_id = resume_session_id;
         sh.cipher_suite = negotiated_suite_;
         sh.compression_method = CompressionMethod::null;
 
