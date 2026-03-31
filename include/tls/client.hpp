@@ -80,6 +80,7 @@ class tls_client {
     bool handshake_complete_ = false;
     std::string negotiated_protocol_;
     SessionId server_hello_session_id_{};
+    SessionId ticket_session_id_{};  // random session_id sent when resuming via ticket
     std::vector<uint8_t> received_ticket_;
     bool server_will_send_ticket_ = false;
 
@@ -94,10 +95,17 @@ public:
         ClientHello ch{};
         ch.client_version = TLS_1_2;
         ch.random = client_random_;
-        if (config_.resume_session && config_.resume_session->session_id.length > 0)
+        if (config_.resume_session && config_.resume_session->session_id.length > 0) {
             ch.session_id = config_.resume_session->session_id;
-        else
+        } else if (!config_.session_ticket.empty()) {
+            // RFC 5077 §3.4: include a non-empty session_id when sending a ticket
+            // so the server can echo it back to signal resumption acceptance
+            ticket_session_id_.data = random_bytes<32>(rng_);
+            ticket_session_id_.length = 32;
+            ch.session_id = ticket_session_id_;
+        } else {
             ch.session_id.length = 0;
+        }
         for (size_t i = 0; i < config_.num_cipher_suites; ++i)
             ch.cipher_suites.push_back(config_.cipher_suites[i]);
         ch.compression_methods.push_back(CompressionMethod::null);
@@ -187,9 +195,13 @@ public:
         }
 
         // Detect abbreviated handshake:
-        // 1. Session ticket resumption (RFC 5077): we sent a ticket and server accepted
+        // 1. Session ticket resumption (RFC 5077): we sent a ticket and server echoed
+        //    back our session_id (or indicated via session_ticket extension)
         // 2. Session ID resumption (RFC 5246): server echoed our session_id
-        bool resuming_ticket = !config_.session_ticket.empty() && server_will_send_ticket_;
+        bool resuming_ticket = !config_.session_ticket.empty() &&
+            (server_will_send_ticket_ ||
+             (ticket_session_id_.length > 0 &&
+              server_hello.session_id == ticket_session_id_));
         bool resuming_id = config_.resume_session &&
             server_hello.session_id.length > 0 &&
             server_hello.session_id == config_.resume_session->session_id;
@@ -585,33 +597,38 @@ private:
         TranscriptHash<Hash> transcript;
         transcript.update(std::span<const uint8_t>(early_bytes.data.data(), early_bytes.len));
 
-        // --- Receive optional NewSessionTicket (RFC 5077) ---
-        if (server_will_send_ticket_) {
-            auto nst_rec = rio_.recv_record();
-            if (!nst_rec) return {nst_rec.error};
-            if (nst_rec.value.type != ContentType::handshake)
-                return {tls_error::unexpected_message};
+        // --- Receive optional NewSessionTicket (RFC 5077) then ChangeCipherSpec ---
+        // The server MAY send a NewSessionTicket before CCS during abbreviated
+        // handshake. We must handle both cases: NST+CCS or just CCS.
+        {
+            auto rec = rio_.recv_record();
+            if (!rec) return {rec.error};
 
-            auto nst_frag = std::span<const uint8_t>(
-                nst_rec.value.fragment.data.data(), nst_rec.value.fragment.size());
-            TlsReader nst_r(nst_frag);
-            auto nst_hdr = read_handshake_header(nst_r);
-            if (nst_hdr.type != HandshakeType::new_session_ticket)
+            if (rec.value.type == ContentType::handshake) {
+                // Should be NewSessionTicket — process it, then read CCS
+                auto nst_frag = std::span<const uint8_t>(
+                    rec.value.fragment.data.data(), rec.value.fragment.size());
+                TlsReader nst_r(nst_frag);
+                auto nst_hdr = read_handshake_header(nst_r);
+                if (nst_hdr.type != HandshakeType::new_session_ticket)
+                    return {tls_error::unexpected_message};
+                auto nst = read_new_session_ticket(nst_r);
+                received_ticket_ = std::move(nst.ticket);
+                transcript.update(nst_frag);
+
+                // Now read CCS
+                auto ccs_rec = rio_.recv_record();
+                if (!ccs_rec) return {ccs_rec.error};
+                if (ccs_rec.value.type != ContentType::change_cipher_spec)
+                    return {tls_error::unexpected_message};
+            } else if (rec.value.type != ContentType::change_cipher_spec) {
                 return {tls_error::unexpected_message};
-            auto nst = read_new_session_ticket(nst_r);
-            received_ticket_ = std::move(nst.ticket);
-            transcript.update(nst_frag);
+            }
         }
 
         // Derive fresh key block with new randoms
         auto params = get_cipher_suite_params(negotiated_suite_);
         auto kb = derive_key_block<Hash>(master_secret_, client_random_, server_random_, params);
-
-        // --- Receive server ChangeCipherSpec ---
-        auto server_ccs = rio_.recv_record();
-        if (!server_ccs) return {server_ccs.error};
-        if (server_ccs.value.type != ContentType::change_cipher_spec)
-            return {tls_error::unexpected_message};
 
         rio_.activate_read_cipher(kb, negotiated_suite_);
 

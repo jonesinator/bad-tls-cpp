@@ -193,7 +193,8 @@ public:
                     return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
                         return handshake_abbreviated<Traits>(
                             std::span<const uint8_t>(ch_frag.data(), ch_msg_len),
-                            *ticket_session, client_supports_tickets);
+                            *ticket_session, client_supports_tickets,
+                            client_hello.session_id);
                     });
                 }
             }
@@ -216,7 +217,8 @@ public:
                     return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
                         return handshake_abbreviated<Traits>(
                             std::span<const uint8_t>(ch_frag.data(), ch_msg_len),
-                            *cached, client_supports_tickets);
+                            *cached, client_supports_tickets,
+                            client_hello.session_id);
                     });
                 }
             }
@@ -832,7 +834,8 @@ private:
     tls_result<void> handshake_abbreviated(
         std::span<const uint8_t> client_hello_bytes,
         const session_data& cached,
-        bool client_supports_tickets = false)
+        bool client_supports_tickets = false,
+        SessionId client_session_id = {})
     {
         using Hash = typename Traits::hash_type;
 
@@ -844,13 +847,11 @@ private:
         server_random_ = random_bytes<32>(rng_);
 
         // --- Send ServerHello ---
-        // For ticket resumption (RFC 5077 §3.4): generate a new session_id
-        // even though the ticket doesn't contain one.
-        SessionId resume_session_id = cached.session_id;
-        if (resume_session_id.length == 0) {
-            resume_session_id.data = random_bytes<32>(rng_);
-            resume_session_id.length = 32;
-        }
+        // RFC 5077 §3.4: If the client sent a non-empty session_id, the server
+        // MUST echo it back so the client can distinguish resumption from a
+        // full handshake. For session ID resumption, use the cached session_id.
+        SessionId resume_session_id = (client_session_id.length > 0)
+            ? client_session_id : cached.session_id;
 
         ServerHello sh{};
         sh.server_version = TLS_1_2;

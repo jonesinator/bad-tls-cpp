@@ -145,6 +145,35 @@ for SUITE in ECDHE-ECDSA-AES128-GCM-SHA256 ECDHE-ECDSA-AES256-GCM-SHA384; do
     stop_server
 done
 
+# ========== Test 3: Session ticket resumption (our client → openssl s_server) ==========
+echo ""
+echo "=== Test: Session Ticket Resumption (our client → openssl s_server) ==="
+PORT=$(get_port 14446)
+start_openssl_server "$PORT" -cipher ECDHE-ECDSA-AES128-GCM-SHA256
+
+TICKET_FILE="$TMPDIR/openssl_ticket.bin"
+
+# First connection: full handshake, receive and save ticket
+run_test "first connect (full handshake, save ticket)" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" --ticket-file "$TICKET_FILE" localhost "$PORT"
+
+# Verify ticket file was created
+TOTAL=$((TOTAL + 1))
+printf "  %-55s " "ticket file saved from openssl s_server"
+if [ -f "$TICKET_FILE" ] && [ -s "$TICKET_FILE" ]; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL (ticket file not created)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Second connection: resume via ticket
+run_test "second connect (ticket resumption)" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" --ticket-file "$TICKET_FILE" localhost "$PORT"
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
