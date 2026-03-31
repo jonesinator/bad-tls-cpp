@@ -320,6 +320,33 @@ run_test "dtls_openssl_client_rsa" "pass" \
 
 kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
 
+# ========== X25519 DTLS self-interop ==========
+echo ""
+echo "=== Test: DTLS X25519 self-interop ==="
+
+PORT=$(get_port 14441)
+$SERVER_TOOL "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_x25519_self_ec" "pass" \
+    bash -c "timeout 15 $CLIENT_TOOL --cafile '$TMPDIR/ca.pem' \
+        localhost $PORT 2>&1 | grep -q 'DTLS handshake complete'"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+sleep 0.5
+
+PORT=$(get_port 14442)
+$SERVER_TOOL "$TMPDIR/rsa_chain.pem" "$TMPDIR/rsa_server_key.pem" "" "$PORT" &
+SERVER_PID=$!
+wait_for_server $SERVER_PID
+
+run_test "dtls_x25519_self_rsa" "pass" \
+    bash -c "timeout 15 $CLIENT_TOOL --cafile '$TMPDIR/rsa_ca.pem' \
+        localhost $PORT 2>&1 | grep -q 'DTLS handshake complete'"
+
+kill -9 $SERVER_PID 2>/dev/null; SERVER_PID=""
+
 # ============================================================
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

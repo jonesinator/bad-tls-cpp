@@ -174,6 +174,17 @@ run_test "second connect (ticket resumption)" "HTTP" \
 
 stop_server
 
+# ========== Test 4: X25519 key exchange (our client → openssl s_server) ==========
+echo ""
+echo "=== Test: X25519 Key Exchange (our client → openssl s_server) ==="
+PORT=$(get_port 14447)
+start_openssl_server "$PORT" -cipher ECDHE-ECDSA-AES128-GCM-SHA256 -curves X25519
+
+run_test "TLS X25519 key exchange" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

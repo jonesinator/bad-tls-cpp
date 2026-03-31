@@ -84,10 +84,11 @@ enum class AlertDescription : uint8_t {
     no_application_protocol = 120,  // RFC 7301
 };
 
-// RFC 4492 Section 5.1.1
+// RFC 4492 Section 5.1.1, RFC 8422
 enum class NamedCurve : uint16_t {
     secp256r1 = 23,
     secp384r1 = 24,
+    x25519    = 29,
 };
 
 // RFC 5246 Section 7.4.1.4.1

@@ -380,6 +380,63 @@ fi
 
 stop_server
 
+# ========== Test 10: X25519 key exchange ==========
+echo ""
+echo "=== Test: X25519 Key Exchange ==="
+PORT=$(get_port 14442)
+start_server "$PORT" "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem"
+
+# openssl s_client requesting X25519 (allow P-256 for signatures)
+TOTAL=$((TOTAL + 1))
+printf "  %-55s " "openssl s_client X25519 -> our server"
+output=$(printf 'GET / HTTP/1.0\r\n\r\n' | \
+    openssl s_client -connect "localhost:$PORT" -CAfile "$TMPDIR/ca.pem" \
+    -tls1_2 -groups X25519:prime256v1 2>&1)
+if echo "$output" | grep -q "Temp Key: X25519"; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL"
+    echo "$output" | tail -10 | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+fi
+
+# Our own client (self-interop; X25519 is now the preferred curve)
+run_test "tls_connect_tool -> our server (X25519 default)" "Hello, world!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
+
+# curl requesting X25519 (allow P-256 for signatures)
+run_test "curl X25519 -> our server" "Hello, world!" \
+    curl -s --cacert "$TMPDIR/ca.pem" --tlsv1.2 --tls-max 1.2 \
+    --curves X25519:prime256v1 "https://localhost:$PORT/"
+
+stop_server
+
+# X25519 with RSA server certificate
+echo ""
+echo "=== Test: X25519 with RSA server cert ==="
+PORT=$(get_port 14443)
+start_server "$PORT" "$TMPDIR/rsa_chain.pem" "$TMPDIR/rsa_server_key.pem"
+
+run_test "tls_connect_tool RSA+X25519 -> Hello, world!" "Hello, world!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/rsa_ca.pem" localhost "$PORT"
+
+TOTAL=$((TOTAL + 1))
+printf "  %-55s " "openssl s_client RSA+X25519 -> our server"
+output=$(printf 'GET / HTTP/1.0\r\n\r\n' | \
+    openssl s_client -connect "localhost:$PORT" -CAfile "$TMPDIR/rsa_ca.pem" \
+    -tls1_2 -groups X25519 2>&1)
+if echo "$output" | grep -q "Temp Key: X25519"; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL"
+    echo "$output" | tail -10 | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+fi
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

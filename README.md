@@ -31,6 +31,7 @@ bad-tls-cpp/
 │   │   ├── ecc.hpp                   # Elliptic curve field/point arithmetic
 │   │   ├── ecdsa.hpp                 # ECDSA signing/verification (RFC 6979)
 │   │   ├── ecdh.hpp                  # ECDH key agreement
+│   │   ├── x25519.hpp                # X25519 key exchange (RFC 7748)
 │   │   ├── sha2.hpp                  # SHA-2 family (FIPS 180-4)
 │   │   ├── hmac.hpp                  # HMAC (RFC 2104)
 │   │   ├── hkdf.hpp                  # HKDF (RFC 5869)
@@ -161,6 +162,10 @@ Complete RFC 4648 codec supporting Base16, Base32, Base32hex, Base64, and Base64
 - **`point<TCurve>`**: An affine point on the curve with addition, doubling, scalar multiplication (double-and-add), infinity representation, on-curve validation, and serialization (uncompressed format: `0x04 || x || y`).
 - Supported curves: **P-256** (NIST), **P-384** (NIST), and **secp256k1** (Bitcoin).
 
+### X25519 Key Exchange (`crypto/x25519.hpp`)
+
+X25519 Diffie-Hellman key exchange on Curve25519 (RFC 7748). Uses the Montgomery ladder for constant-iteration scalar multiplication on the x-coordinate only. Reuses `field_element<curve25519<T>>` for modular arithmetic over p = 2²⁵⁵ − 19. Provides `x25519_public_key()`, `x25519_shared_secret()`, and low-level `x25519_scalar_mult()`. Fully constexpr — the RFC 7748 test vectors are verified at compile time via `static_assert`.
+
 ### ECDSA (`crypto/ecdsa.hpp`)
 
 Full ECDSA implementation:
@@ -236,7 +241,7 @@ The TLS module implements TLS 1.2 client and server (RFC 5246): types, binary se
 
 ### Wire Types (`tls/types.hpp`)
 
-Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (P-256, P-384), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths.
+Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (X25519, P-256, P-384), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths.
 
 ### Record Layer (`tls/record.hpp`)
 
@@ -348,6 +353,7 @@ The test suite is comprehensive:
 | `test_ecc.cpp` | Generator point validation, point arithmetic on P-256 and secp256k1 |
 | `test_ecdsa.cpp` | Signing, verification, RFC 6979, SHA-256/384/512, HMAC, OpenSSL interop |
 | `test_ecdh.cpp` | Keypair derivation, validation, shared secret, HKDF integration |
+| `test_x25519.cpp` | RFC 7748 test vectors, DH roundtrip, low-order point rejection, compile-time verification |
 | `test_aes.cpp` | AES-128/192/256 FIPS 197 test vectors, encrypt/decrypt roundtrip, compile-time verification |
 | `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
 | `test_random.cpp` | Concept satisfaction, xoshiro determinism, system_random output, random_scalar bounds |

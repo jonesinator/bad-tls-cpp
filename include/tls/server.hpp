@@ -45,8 +45,8 @@ struct server_config {
     size_t num_cipher_suites = 4;
 
     // Supported curves for ECDHE
-    std::array<NamedCurve, 2> curves = {NamedCurve::secp256r1, NamedCurve::secp384r1};
-    size_t num_curves = 2;
+    std::array<NamedCurve, 3> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1};
+    size_t num_curves = 3;
 
     // Client certificate verification (mTLS)
     const asn1::x509::trust_store* client_ca = nullptr;  // non-null enables CertificateRequest
@@ -535,45 +535,60 @@ private:
         if (!cert_err) return {cert_err.error};
 
         // --- Send ServerKeyExchange ---
-        // For RSA keys, use P-256 as default ECDHE curve
+        // Use first configured curve; for RSA keys, ECDHE curve is independent of cert key
         bool is_rsa_key = std::holds_alternative<rsa_private_key<rsa_num>>(config_.private_key);
-        NamedCurve ecdhe_curve = is_rsa_key ? NamedCurve::secp256r1 : config_.private_key_curve;
+        NamedCurve ecdhe_curve = config_.curves[0];
 
         // Generate ephemeral ECDH and sign, dispatching on curve and key type
         ServerKeyExchangeEcdhe ske;
         std::variant<
             asn1::x509::p256_curve::number_type,
-            asn1::x509::p384_curve::number_type
+            asn1::x509::p384_curve::number_type,
+            std::array<uint8_t, 32>  // X25519
         > eph_priv;
 
-        if (ecdhe_curve == NamedCurve::secp256r1) {
-            auto kp = generate_ecdhe_keypair<asn1::x509::p256_curve>(rng_);
-            eph_priv = kp.private_key;
-
+        auto sign_ske = [&](NamedCurve curve, const asn1::FixedVector<uint8_t, 133>& pub_bytes) -> tls_result<void> {
             if (is_rsa_key) {
                 auto* rsa_key = std::get_if<rsa_private_key<rsa_num>>(&config_.private_key);
                 if (!rsa_key) return {tls_error::internal_error};
-                ske = build_server_key_exchange_rsa<Hash>(ecdhe_curve, kp.public_key_bytes, *rsa_key);
+                ske = build_server_key_exchange_rsa<Hash>(curve, pub_bytes, *rsa_key);
             } else {
-                auto* signing_key = std::get_if<asn1::x509::p256_curve::number_type>(&config_.private_key);
-                if (!signing_key) return {tls_error::internal_error};
-                ske = build_server_key_exchange_ecdsa<asn1::x509::p256_curve, Hash>(
-                    ecdhe_curve, kp.public_key_bytes, *signing_key);
+                if (config_.private_key_curve == NamedCurve::secp256r1) {
+                    auto* signing_key = std::get_if<asn1::x509::p256_curve::number_type>(&config_.private_key);
+                    if (!signing_key) return {tls_error::internal_error};
+                    ske = build_server_key_exchange_ecdsa<asn1::x509::p256_curve, Hash>(
+                        curve, pub_bytes, *signing_key);
+                } else if (config_.private_key_curve == NamedCurve::secp384r1) {
+                    auto* signing_key = std::get_if<asn1::x509::p384_curve::number_type>(&config_.private_key);
+                    if (!signing_key) return {tls_error::internal_error};
+                    ske = build_server_key_exchange_ecdsa<asn1::x509::p384_curve, Hash>(
+                        curve, pub_bytes, *signing_key);
+                } else {
+                    return {tls_error::internal_error};
+                }
             }
+            return {tls_error::ok};
+        };
+
+        if (ecdhe_curve == NamedCurve::x25519) {
+            auto priv = random_bytes<32>(rng_);
+            auto pub = x25519_public_key<asn1::x509::uint512>(priv);
+            eph_priv = priv;
+
+            asn1::FixedVector<uint8_t, 133> pub_bytes;
+            for (size_t i = 0; i < 32; ++i) pub_bytes.push_back(pub[i]);
+            auto sign_err = sign_ske(ecdhe_curve, pub_bytes);
+            if (!sign_err) return {sign_err.error};
+        } else if (ecdhe_curve == NamedCurve::secp256r1) {
+            auto kp = generate_ecdhe_keypair<asn1::x509::p256_curve>(rng_);
+            eph_priv = kp.private_key;
+            auto sign_err = sign_ske(ecdhe_curve, kp.public_key_bytes);
+            if (!sign_err) return {sign_err.error};
         } else if (ecdhe_curve == NamedCurve::secp384r1) {
             auto kp = generate_ecdhe_keypair<asn1::x509::p384_curve>(rng_);
             eph_priv = kp.private_key;
-
-            if (is_rsa_key) {
-                auto* rsa_key = std::get_if<rsa_private_key<rsa_num>>(&config_.private_key);
-                if (!rsa_key) return {tls_error::internal_error};
-                ske = build_server_key_exchange_rsa<Hash>(ecdhe_curve, kp.public_key_bytes, *rsa_key);
-            } else {
-                auto* signing_key = std::get_if<asn1::x509::p384_curve::number_type>(&config_.private_key);
-                if (!signing_key) return {tls_error::internal_error};
-                ske = build_server_key_exchange_ecdsa<asn1::x509::p384_curve, Hash>(
-                    ecdhe_curve, kp.public_key_bytes, *signing_key);
-            }
+            auto sign_err = sign_ske(ecdhe_curve, kp.public_key_bytes);
+            if (!sign_err) return {sign_err.error};
         } else {
             return {tls_error::unsupported_curve};
         }
@@ -675,7 +690,17 @@ private:
 
         // Compute ECDH shared secret
         pre_master_secret pms{};
-        if (ecdhe_curve == NamedCurve::secp256r1) {
+        if (ecdhe_curve == NamedCurve::x25519) {
+            auto* priv = std::get_if<std::array<uint8_t, 32>>(&eph_priv);
+            if (!priv || cke.public_key.len != 32)
+                return {tls_error::internal_error};
+            std::array<uint8_t, 32> peer_key{};
+            for (size_t i = 0; i < 32; ++i) peer_key[i] = cke.public_key[i];
+            auto secret = x25519_shared_secret<asn1::x509::uint512>(*priv, peer_key);
+            if (!secret) return {tls_error::internal_error};
+            pms.length = 32;
+            for (size_t i = 0; i < 32; ++i) pms.data[i] = (*secret)[i];
+        } else if (ecdhe_curve == NamedCurve::secp256r1) {
             auto* priv = std::get_if<asn1::x509::p256_curve::number_type>(&eph_priv);
             auto pms_res = compute_server_ecdh<asn1::x509::p256_curve>(
                 *priv, std::span<const uint8_t>(cke.public_key.data.data(), cke.public_key.len));

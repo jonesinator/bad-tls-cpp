@@ -21,6 +21,7 @@
 #include "types.hpp"
 #include <asn1/fixed_vector.hpp>
 #include <crypto/ecdh.hpp>
+#include <crypto/x25519.hpp>
 #include <crypto/ecdsa.hpp>
 #include <crypto/random.hpp>
 #include <crypto/rsa.hpp>
@@ -395,6 +396,35 @@ tls_result<ecdh_exchange_result> compute_ecdh_exchange_impl(
     return {{pms, cke}, tls_error::ok};
 }
 
+template <random_generator RNG>
+tls_result<ecdh_exchange_result> compute_x25519_exchange_impl(
+    std::span<const uint8_t> server_key_bytes, RNG& rng)
+{
+    if (server_key_bytes.size() != 32)
+        return {{}, tls_error::invalid_server_key};
+
+    // Generate ephemeral private key (32 random bytes, clamping happens inside)
+    auto priv = random_bytes<32>(rng);
+    auto pub = x25519_public_key<asn1::x509::uint512>(priv);
+
+    // Compute shared secret
+    std::array<uint8_t, 32> peer_key{};
+    for (size_t i = 0; i < 32; ++i) peer_key[i] = server_key_bytes[i];
+    auto secret = x25519_shared_secret<asn1::x509::uint512>(priv, peer_key);
+    if (!secret) return {{}, tls_error::internal_error};
+
+    // Pack pre-master secret (32 bytes)
+    pre_master_secret pms{};
+    pms.length = 32;
+    for (size_t i = 0; i < 32; ++i) pms.data[i] = (*secret)[i];
+
+    // Client public key: 32 raw bytes (no 0x04 prefix for X25519)
+    ClientKeyExchangeEcdhe cke{};
+    for (size_t i = 0; i < 32; ++i) cke.public_key.push_back(pub[i]);
+
+    return {{pms, cke}, tls_error::ok};
+}
+
 } // namespace detail
 
 template <random_generator RNG>
@@ -407,6 +437,8 @@ tls_result<ecdh_exchange_result> compute_ecdh_exchange(
         return detail::compute_ecdh_exchange_impl<asn1::x509::p256_curve>(server_point_bytes, rng);
     if (curve == NamedCurve::secp384r1)
         return detail::compute_ecdh_exchange_impl<asn1::x509::p384_curve>(server_point_bytes, rng);
+    if (curve == NamedCurve::x25519)
+        return detail::compute_x25519_exchange_impl(server_point_bytes, rng);
     return {{}, tls_error::unsupported_curve};
 }
 

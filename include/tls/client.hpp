@@ -34,8 +34,8 @@ struct client_config {
     };
     size_t num_cipher_suites = 4;
 
-    std::array<NamedCurve, 2> curves = {NamedCurve::secp256r1, NamedCurve::secp384r1};
-    size_t num_curves = 2;
+    std::array<NamedCurve, 3> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1};
+    size_t num_curves = 3;
 
     std::array<SignatureAndHashAlgorithm, 4> sig_algs = {{
         {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa},
