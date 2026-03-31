@@ -82,8 +82,8 @@ struct record_io {
     struct cipher_state {
         std::array<uint8_t, 32> write_key{};
         std::array<uint8_t, 32> read_key{};
-        std::array<uint8_t, 4>  write_iv{};
-        std::array<uint8_t, 4>  read_iv{};
+        std::array<uint8_t, 12> write_iv{};
+        std::array<uint8_t, 12> read_iv{};
         size_t key_length = 0;
         uint64_t write_seq = 0;
         uint64_t read_seq = 0;
@@ -130,11 +130,18 @@ struct record_io {
     constexpr tls_result<void> send_record(ContentType type, std::span<const uint8_t> payload) {
         if (write_encrypted) {
             auto encrypted = dispatch_cipher_suite(cs.suite, [&]<typename Traits>() {
-                using Cipher = typename Traits::cipher_type;
-                return encrypt_record<Cipher>(
-                    std::span<const uint8_t, Traits::key_length>(cs.write_key.data(), Traits::key_length),
-                    std::span<const uint8_t, 4>(cs.write_iv),
-                    cs.write_seq, type, TLS_1_2, payload);
+                if constexpr (Traits::record_iv_length == 0) {
+                    return encrypt_record_chacha20(
+                        std::span<const uint8_t, 32>(cs.write_key.data(), 32),
+                        std::span<const uint8_t, 12>(cs.write_iv),
+                        cs.write_seq, type, TLS_1_2, payload);
+                } else {
+                    using Cipher = typename Traits::cipher_type;
+                    return encrypt_record<Cipher>(
+                        std::span<const uint8_t, Traits::key_length>(cs.write_key.data(), Traits::key_length),
+                        std::span<const uint8_t, 4>(cs.write_iv.data(), 4),
+                        cs.write_seq, type, TLS_1_2, payload);
+                }
             });
             cs.write_seq++;
 
@@ -210,12 +217,20 @@ struct record_io {
         if (read_encrypted) {
             auto plaintext = dispatch_cipher_suite(cs.suite, [&]<typename Traits>()
                 -> std::optional<asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>> {
-                using Cipher = typename Traits::cipher_type;
-                return decrypt_record<Cipher>(
-                    std::span<const uint8_t, Traits::key_length>(cs.read_key.data(), Traits::key_length),
-                    std::span<const uint8_t, 4>(cs.read_iv),
-                    cs.read_seq, rec.type, rec.version,
-                    std::span<const uint8_t>(rec.fragment.data.data(), rec.fragment.len));
+                if constexpr (Traits::record_iv_length == 0) {
+                    return decrypt_record_chacha20(
+                        std::span<const uint8_t, 32>(cs.read_key.data(), 32),
+                        std::span<const uint8_t, 12>(cs.read_iv),
+                        cs.read_seq, rec.type, rec.version,
+                        std::span<const uint8_t>(rec.fragment.data.data(), rec.fragment.len));
+                } else {
+                    using Cipher = typename Traits::cipher_type;
+                    return decrypt_record<Cipher>(
+                        std::span<const uint8_t, Traits::key_length>(cs.read_key.data(), Traits::key_length),
+                        std::span<const uint8_t, 4>(cs.read_iv.data(), 4),
+                        cs.read_seq, rec.type, rec.version,
+                        std::span<const uint8_t>(rec.fragment.data.data(), rec.fragment.len));
+                }
             });
             cs.read_seq++;
             if (!plaintext) return {{}, tls_error::bad_record_mac};

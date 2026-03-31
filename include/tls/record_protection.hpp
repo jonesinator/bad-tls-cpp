@@ -11,6 +11,7 @@
 
 #include "record.hpp"
 #include "types.hpp"
+#include <crypto/chacha20_poly1305.hpp>
 #include <crypto/gcm.hpp>
 #include <asn1/fixed_vector.hpp>
 #include <array>
@@ -134,6 +135,86 @@ constexpr std::optional<asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>> decryp
         std::span<const uint8_t, 16>(tag),
         pt_out);
 
+    if (!ok) return std::nullopt;
+    return plaintext;
+}
+
+// --- ChaCha20-Poly1305 record protection (RFC 7905) ---
+
+// RFC 7905 Section 2: nonce = fixed_iv XOR padded_sequence_number
+constexpr std::array<uint8_t, 12> build_chacha_nonce(
+    std::span<const uint8_t, 12> fixed_iv,
+    uint64_t sequence_number)
+{
+    std::array<uint8_t, 12> nonce{};
+    // Pad sequence_number to 12 bytes: 4 zero bytes || 8 big-endian bytes
+    std::array<uint8_t, 12> padded_seq{};
+    for (int i = 7; i >= 0; --i)
+        padded_seq[4 + (7 - i)] = static_cast<uint8_t>(sequence_number >> (i * 8));
+    // XOR with fixed_iv
+    for (size_t i = 0; i < 12; ++i)
+        nonce[i] = fixed_iv[i] ^ padded_seq[i];
+    return nonce;
+}
+
+// Encrypt a TLS record with ChaCha20-Poly1305.
+// Returns: ciphertext(plaintext.size()) || tag(16) — no explicit nonce prefix.
+constexpr asn1::FixedVector<uint8_t, MAX_CIPHERTEXT_LENGTH> encrypt_record_chacha20(
+    std::span<const uint8_t, 32> key,
+    std::span<const uint8_t, 12> fixed_iv,
+    uint64_t sequence_number,
+    ContentType type,
+    ProtocolVersion version,
+    std::span<const uint8_t> plaintext)
+{
+    auto nonce = build_chacha_nonce(fixed_iv, sequence_number);
+    auto aad = build_additional_data(sequence_number, type, version,
+                                     static_cast<uint16_t>(plaintext.size()));
+
+    asn1::FixedVector<uint8_t, MAX_CIPHERTEXT_LENGTH> result;
+    for (size_t i = 0; i < plaintext.size(); ++i)
+        result.push_back(0);
+
+    std::span<uint8_t> ct_out(result.data.data(), plaintext.size());
+    auto tag = chacha20_poly1305_encrypt(key, nonce, plaintext, aad, ct_out);
+
+    for (size_t i = 0; i < 16; ++i)
+        result.push_back(tag[i]);
+
+    return result;
+}
+
+// Decrypt a TLS record with ChaCha20-Poly1305.
+// Input: ciphertext || tag(16) — no explicit nonce prefix.
+constexpr std::optional<asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>> decrypt_record_chacha20(
+    std::span<const uint8_t, 32> key,
+    std::span<const uint8_t, 12> fixed_iv,
+    uint64_t sequence_number,
+    ContentType type,
+    ProtocolVersion version,
+    std::span<const uint8_t> record_payload)
+{
+    // Minimum: tag(16) for zero-length plaintext
+    if (record_payload.size() < 16)
+        return std::nullopt;
+
+    size_t ct_len = record_payload.size() - 16;
+    auto ciphertext = record_payload.subspan(0, ct_len);
+    std::array<uint8_t, 16> tag{};
+    for (size_t i = 0; i < 16; ++i)
+        tag[i] = record_payload[ct_len + i];
+
+    auto nonce = build_chacha_nonce(fixed_iv, sequence_number);
+    auto aad = build_additional_data(sequence_number, type, version,
+                                     static_cast<uint16_t>(ct_len));
+
+    asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH> plaintext;
+    for (size_t i = 0; i < ct_len; ++i)
+        plaintext.push_back(0);
+
+    std::span<uint8_t> pt_out(plaintext.data.data(), ct_len);
+    bool ok = chacha20_poly1305_decrypt(key, nonce, ciphertext, aad,
+                                         std::span<const uint8_t, 16>(tag), pt_out);
     if (!ok) return std::nullopt;
     return plaintext;
 }

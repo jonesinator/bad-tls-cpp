@@ -13,6 +13,7 @@
 #include "dtls_record.hpp"
 #include "record.hpp"
 #include "types.hpp"
+#include <crypto/chacha20_poly1305.hpp>
 #include <crypto/gcm.hpp>
 #include <asn1/fixed_vector.hpp>
 #include <array>
@@ -140,6 +141,84 @@ std::optional<asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>> dtls_decrypt_rec
         std::span<const uint8_t, 16>(tag),
         pt_out);
 
+    if (!ok) return std::nullopt;
+    return plaintext;
+}
+
+// --- ChaCha20-Poly1305 DTLS record protection (RFC 7905) ---
+
+// DTLS ChaCha20 nonce: fixed_iv(12) XOR padded(epoch(2) || seq_num(6))
+constexpr std::array<uint8_t, 12> build_dtls_chacha_nonce(
+    std::span<const uint8_t, 12> fixed_iv,
+    uint16_t epoch,
+    uint64_t sequence_number)
+{
+    std::array<uint8_t, 12> padded{};
+    padded[4] = static_cast<uint8_t>(epoch >> 8);
+    padded[5] = static_cast<uint8_t>(epoch);
+    for (int i = 5; i >= 0; --i)
+        padded[6 + (5 - i)] = static_cast<uint8_t>(sequence_number >> (i * 8));
+
+    std::array<uint8_t, 12> nonce{};
+    for (size_t i = 0; i < 12; ++i)
+        nonce[i] = fixed_iv[i] ^ padded[i];
+    return nonce;
+}
+
+asn1::FixedVector<uint8_t, MAX_CIPHERTEXT_LENGTH> dtls_encrypt_record_chacha20(
+    std::span<const uint8_t, 32> key,
+    std::span<const uint8_t, 12> fixed_iv,
+    uint16_t epoch,
+    uint64_t sequence_number,
+    ContentType type,
+    ProtocolVersion version,
+    std::span<const uint8_t> plaintext)
+{
+    auto nonce = build_dtls_chacha_nonce(fixed_iv, epoch, sequence_number);
+    auto aad = build_dtls_additional_data(epoch, sequence_number, type, version,
+                                          static_cast<uint16_t>(plaintext.size()));
+
+    asn1::FixedVector<uint8_t, MAX_CIPHERTEXT_LENGTH> result;
+    for (size_t i = 0; i < plaintext.size(); ++i)
+        result.push_back(0);
+
+    std::span<uint8_t> ct_out(result.data.data(), plaintext.size());
+    auto tag = chacha20_poly1305_encrypt(key, nonce, plaintext, aad, ct_out);
+
+    for (size_t i = 0; i < 16; ++i)
+        result.push_back(tag[i]);
+
+    return result;
+}
+
+std::optional<asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH>> dtls_decrypt_record_chacha20(
+    std::span<const uint8_t, 32> key,
+    std::span<const uint8_t, 12> fixed_iv,
+    uint16_t epoch,
+    uint64_t sequence_number,
+    ContentType type,
+    ProtocolVersion version,
+    std::span<const uint8_t> record_payload)
+{
+    if (record_payload.size() < 16) return std::nullopt;
+
+    size_t ct_len = record_payload.size() - 16;
+    auto ciphertext = record_payload.subspan(0, ct_len);
+    std::array<uint8_t, 16> tag{};
+    for (size_t i = 0; i < 16; ++i)
+        tag[i] = record_payload[ct_len + i];
+
+    auto nonce = build_dtls_chacha_nonce(fixed_iv, epoch, sequence_number);
+    auto aad = build_dtls_additional_data(epoch, sequence_number, type, version,
+                                          static_cast<uint16_t>(ct_len));
+
+    asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH> plaintext;
+    for (size_t i = 0; i < ct_len; ++i)
+        plaintext.push_back(0);
+
+    std::span<uint8_t> pt_out(plaintext.data.data(), ct_len);
+    bool ok = chacha20_poly1305_decrypt(key, nonce, ciphertext, aad,
+                                         std::span<const uint8_t, 16>(tag), pt_out);
     if (!ok) return std::nullopt;
     return plaintext;
 }

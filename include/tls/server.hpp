@@ -36,13 +36,15 @@ struct server_config {
     NamedCurve private_key_curve = NamedCurve::secp256r1;  // for EC keys: ECDHE curve
 
     // Cipher suites the server supports
-    std::array<CipherSuite, 4> cipher_suites = {
+    std::array<CipherSuite, 6> cipher_suites = {
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+        CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     };
-    size_t num_cipher_suites = 4;
+    size_t num_cipher_suites = 6;
 
     // Supported curves for ECDHE
     std::array<NamedCurve, 3> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1};
@@ -108,7 +110,8 @@ public:
             auto suite = config_.cipher_suites[i];
             // Skip suites that don't match our key type
             bool suite_is_rsa = (suite == CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ||
-                                 suite == CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384);
+                                 suite == CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 ||
+                                 suite == CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256);
             if (suite_is_rsa != is_rsa_key) continue;
 
             for (size_t j = 0; j < client_hello.cipher_suites.size(); ++j) {

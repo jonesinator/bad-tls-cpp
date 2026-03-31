@@ -11,6 +11,7 @@
 
 #include "types.hpp"
 #include <crypto/aes.hpp>
+#include <crypto/chacha20.hpp>
 #include <crypto/sha2.hpp>
 #include <cstddef>
 
@@ -33,6 +34,9 @@ constexpr CipherSuiteParams get_cipher_suite_params(CipherSuite suite) {
     case CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
     case CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
         return {32, 4, 8, 16, 48, 12};
+    case CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:
+    case CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:
+        return {32, 12, 0, 16, 32, 12};
     }
     throw "unsupported cipher suite";
 }
@@ -76,6 +80,24 @@ template <> struct cipher_suite_traits<CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256
     static constexpr size_t tag_length = 16;
 };
 
+template <> struct cipher_suite_traits<CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256> {
+    using cipher_type = chacha20_poly1305_cipher;
+    using hash_type = sha256_state;
+    static constexpr size_t key_length = 32;
+    static constexpr size_t fixed_iv_length = 12;
+    static constexpr size_t record_iv_length = 0;
+    static constexpr size_t tag_length = 16;
+};
+
+template <> struct cipher_suite_traits<CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256> {
+    using cipher_type = chacha20_poly1305_cipher;
+    using hash_type = sha256_state;
+    static constexpr size_t key_length = 32;
+    static constexpr size_t fixed_iv_length = 12;
+    static constexpr size_t record_iv_length = 0;
+    static constexpr size_t tag_length = 16;
+};
+
 // Runtime→compile-time dispatch: calls f.template operator()<traits>()
 // for the matching cipher suite.
 template <typename F>
@@ -89,6 +111,10 @@ constexpr auto dispatch_cipher_suite(CipherSuite suite, F&& f) {
         return f.template operator()<cipher_suite_traits<CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384>>();
     case CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
         return f.template operator()<cipher_suite_traits<CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384>>();
+    case CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:
+        return f.template operator()<cipher_suite_traits<CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256>>();
+    case CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:
+        return f.template operator()<cipher_suite_traits<CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256>>();
     }
     throw "unsupported cipher suite";
 }

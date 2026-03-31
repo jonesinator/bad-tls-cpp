@@ -26,13 +26,15 @@
 namespace tls {
 
 struct client_config {
-    std::array<CipherSuite, 4> cipher_suites = {
+    std::array<CipherSuite, 6> cipher_suites = {
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+        CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
         CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
     };
-    size_t num_cipher_suites = 4;
+    size_t num_cipher_suites = 6;
 
     std::array<NamedCurve, 3> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1};
     size_t num_curves = 3;

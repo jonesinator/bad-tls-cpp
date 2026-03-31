@@ -37,6 +37,9 @@ bad-tls-cpp/
 │   │   ├── hkdf.hpp                  # HKDF (RFC 5869)
 │   │   ├── aes.hpp                   # AES block cipher (FIPS 197)
 │   │   ├── gcm.hpp                   # GCM authenticated encryption (SP 800-38D)
+│   │   ├── chacha20.hpp              # ChaCha20 stream cipher (RFC 7539)
+│   │   ├── poly1305.hpp              # Poly1305 MAC (RFC 7539)
+│   │   ├── chacha20_poly1305.hpp     # ChaCha20-Poly1305 AEAD (RFC 7539)
 │   │   ├── tls_prf.hpp               # TLS 1.2 PRF (RFC 5246)
 │   │   ├── rsa.hpp                   # RSA-PSS and PKCS#1 v1.5 signing/verification (RFC 8017)
 │   │   ├── random.hpp                # Random number generation (concept + impls)
@@ -56,7 +59,7 @@ bad-tls-cpp/
 │       ├── handshake.hpp             # Handshake message structs + serialization
 │       ├── cipher_suite.hpp          # Cipher suite parameters and type-level traits
 │       ├── key_schedule.hpp          # Master secret, key expansion, verify_data
-│       ├── record_protection.hpp     # AES-GCM record encrypt/decrypt (RFC 5288)
+│       ├── record_protection.hpp     # AEAD record encrypt/decrypt (AES-GCM + ChaCha20-Poly1305)
 │       ├── transcript.hpp            # Handshake transcript hash accumulator
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
@@ -67,7 +70,7 @@ bad-tls-cpp/
 │       ├── tcp_transport.hpp         # POSIX TCP socket + listener transport
 │       ├── udp_transport.hpp         # POSIX UDP socket + listener transport (DTLS)
 │       ├── dtls_record.hpp           # DTLS record framing (13-byte header)
-│       ├── dtls_record_protection.hpp # DTLS AES-GCM nonce/AAD + anti-replay window
+│       ├── dtls_record_protection.hpp # DTLS AEAD nonce/AAD + anti-replay window
 │       ├── dtls_handshake.hpp        # DTLS handshake headers + HelloVerifyRequest
 │       ├── dtls_connection.hpp       # DTLS record I/O + handshake reader
 │       ├── dtls_client.hpp           # dtls_client handshake with cookie exchange
@@ -253,9 +256,11 @@ Structs and serialization for all handshake message types: `ClientHello`, `Serve
 
 ### Cipher Suite Definitions (`tls/cipher_suite.hpp`)
 
-Maps the four supported cipher suites to algorithm parameters and C++ types. `CipherSuiteParams` provides runtime-queryable sizes. `cipher_suite_traits<Suite>` provides compile-time type mappings. `dispatch_cipher_suite()` bridges runtime selection to compile-time dispatch.
+Maps the six supported cipher suites to algorithm parameters and C++ types. `CipherSuiteParams` provides runtime-queryable sizes. `cipher_suite_traits<Suite>` provides compile-time type mappings. `dispatch_cipher_suite()` bridges runtime selection to compile-time dispatch.
 
 Supported suites:
+- `TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256` (0xCCA9)
+- `TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256` (0xCCA8)
 - `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256` (0xC02F)
 - `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384` (0xC030)
 - `TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256` (0xC02B)
@@ -267,7 +272,7 @@ Master secret derivation, key block expansion, and Finished verify_data computat
 
 ### Record Protection (`tls/record_protection.hpp`)
 
-AES-GCM record encryption and decryption per RFC 5288. `build_nonce()` constructs the 12-byte GCM nonce from a 4-byte fixed IV and 8-byte sequence number. `build_additional_data()` constructs the 13-byte AAD. `encrypt_record()` produces `explicit_nonce || ciphertext || tag`. `decrypt_record()` returns `std::optional` — `std::nullopt` on authentication failure.
+AEAD record encryption and decryption. AES-GCM (RFC 5288): `build_nonce()` constructs the 12-byte nonce from a 4-byte fixed IV and 8-byte sequence number; wire format is `explicit_nonce || ciphertext || tag`. ChaCha20-Poly1305 (RFC 7905): `build_chacha_nonce()` XORs the 12-byte fixed IV with the padded sequence number; wire format is `ciphertext || tag` (no explicit nonce). Both use the same 13-byte AAD via `build_additional_data()`.
 
 ### Transcript Hash (`tls/transcript.hpp`)
 
@@ -311,7 +316,7 @@ DTLS records have a 13-byte header (vs. TLS's 5-byte): type(1) + version(2) + ep
 
 ### DTLS Record Protection (`tls/dtls_record_protection.hpp`)
 
-AES-GCM encryption/decryption adapted for DTLS: nonce is `fixed_iv(4) || epoch(2) || seq(6)`, AAD uses `epoch(2) || seq(6)` instead of TLS's `seq(8)`. Includes a sliding-window `replay_window` (64-entry bitmap per RFC 6347 Section 4.1.2.6) for anti-replay protection.
+AEAD encryption/decryption adapted for DTLS. AES-GCM: nonce is `fixed_iv(4) || epoch(2) || seq(6)`. ChaCha20-Poly1305: nonce is `fixed_iv(12) XOR padded(epoch(2) || seq(6))`. AAD uses `epoch(2) || seq(6)` instead of TLS's `seq(8)`. Includes a sliding-window `replay_window` (64-entry bitmap per RFC 6347 Section 4.1.2.6) for anti-replay protection.
 
 ### DTLS Handshake Messages (`tls/dtls_handshake.hpp`)
 
@@ -323,7 +328,7 @@ DTLS-specific messages: `HelloVerifyRequest` (cookie exchange for DoS protection
 
 ### DTLS Client (`tls/dtls_client.hpp`)
 
-`dtls_client<Transport, RNG>` performs a full DTLS 1.2 ECDHE handshake with cookie exchange: sends initial ClientHello, handles HelloVerifyRequest, re-sends ClientHello with cookie, then proceeds through the standard TLS 1.2 message flow. Supports certificate verification, hostname verification, mutual DTLS with EC and RSA client certificates, ALPN (RFC 7301), and session ID-based resumption (RFC 5246 Section 7.4.1.2). Same four cipher suites as TLS.
+`dtls_client<Transport, RNG>` performs a full DTLS 1.2 ECDHE handshake with cookie exchange: sends initial ClientHello, handles HelloVerifyRequest, re-sends ClientHello with cookie, then proceeds through the standard TLS 1.2 message flow. Supports certificate verification, hostname verification, mutual DTLS with EC and RSA client certificates, ALPN (RFC 7301), and session ID-based resumption (RFC 5246 Section 7.4.1.2). Same six cipher suites as TLS.
 
 ### DTLS Server (`tls/dtls_server.hpp`)
 
@@ -356,6 +361,9 @@ The test suite is comprehensive:
 | `test_x25519.cpp` | RFC 7748 test vectors, DH roundtrip, low-order point rejection, compile-time verification |
 | `test_aes.cpp` | AES-128/192/256 FIPS 197 test vectors, encrypt/decrypt roundtrip, compile-time verification |
 | `test_gcm.cpp` | AES-GCM SP 800-38D test vectors (cases 1-4, 13-15), tag verification, compile-time test |
+| `test_chacha20.cpp` | ChaCha20 RFC 7539 test vectors: quarter-round, block function, encryption, compile-time test |
+| `test_poly1305.cpp` | Poly1305 RFC 7539 test vector, incremental interface, compile-time test |
+| `test_chacha20_poly1305.cpp` | ChaCha20-Poly1305 AEAD RFC 7539 test vector, tag tampering, roundtrip, compile-time test |
 | `test_random.cpp` | Concept satisfaction, xoshiro determinism, system_random output, random_scalar bounds |
 | `test_tls_prf.cpp` | TLS 1.2 PRF with SHA-256 and SHA-384, compile-time verification |
 | `test_rsa.cpp` | RSA-PSS and PKCS#1 v1.5 sign/verify, known-signature verification, negative tests |
@@ -380,7 +388,7 @@ The test suite is comprehensive:
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_dtls_record.cpp` | DTLS record framing: 13-byte header, 48-bit sequence numbers, roundtrip serialization |
-| `test_dtls_record_protection.cpp` | DTLS nonce/AAD construction, AES-GCM encrypt/decrypt roundtrip, anti-replay window |
+| `test_dtls_record_protection.cpp` | DTLS nonce/AAD construction, AEAD encrypt/decrypt roundtrip, anti-replay window |
 | `test_dtls_handshake.cpp` | DTLS handshake headers, HelloVerifyRequest, DtlsClientHello with/without cookie, Finished |
 | `dtls_connect_tool.cpp` | DTLS client tool with `--cafile`, `--cert`, `--key` for custom CA and mTLS |
 | `dtls_server_tool.cpp` | DTLS server tool with `--client-ca` and `--require-client-cert` for mTLS |

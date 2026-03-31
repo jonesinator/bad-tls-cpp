@@ -312,7 +312,7 @@ void test_full_handshake() {
     // Encrypt server Finished
     auto encrypted_fin = encrypt_record<aes128>(
         std::span<const uint8_t, 16>(kb.server_write_key.data(), 16),
-        std::span<const uint8_t, 4>(kb.server_write_iv),
+        std::span<const uint8_t, 4>(kb.server_write_iv.data(), 4),
         0, ContentType::handshake, TLS_1_2, sfin_w.data());
 
     // --- Assemble memory transport ---

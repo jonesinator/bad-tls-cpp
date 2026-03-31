@@ -174,7 +174,18 @@ run_test "second connect (ticket resumption)" "HTTP" \
 
 stop_server
 
-# ========== Test 4: X25519 key exchange (our client → openssl s_server) ==========
+# ========== Test 4: ChaCha20-Poly1305 (our client → openssl s_server) ==========
+echo ""
+echo "=== Test: ChaCha20-Poly1305 (our client → openssl s_server) ==="
+PORT=$(get_port 14448)
+start_openssl_server "$PORT" -cipher ECDHE-ECDSA-CHACHA20-POLY1305
+
+run_test "TLS CHACHA20-POLY1305 ECDSA" "HTTP" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" localhost "$PORT"
+
+stop_server
+
+# ========== Test 5: X25519 key exchange (our client → openssl s_server) ==========
 echo ""
 echo "=== Test: X25519 Key Exchange (our client → openssl s_server) ==="
 PORT=$(get_port 14447)

@@ -437,6 +437,43 @@ fi
 
 stop_server
 
+# ========== Test 12: ChaCha20-Poly1305 cipher suites ==========
+echo ""
+echo "=== Test: ChaCha20-Poly1305 (ECDSA server) ==="
+PORT=$(get_port 14444)
+start_server "$PORT" "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem"
+
+TOTAL=$((TOTAL + 1))
+printf "  %-55s " "openssl s_client CHACHA20 -> our server"
+output=$(printf 'GET / HTTP/1.0\r\n\r\n' | \
+    openssl s_client -connect "localhost:$PORT" -CAfile "$TMPDIR/ca.pem" \
+    -tls1_2 -cipher ECDHE-ECDSA-CHACHA20-POLY1305 2>&1)
+if echo "$output" | grep -q "Cipher.*CHACHA20"; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL"
+    echo "$output" | tail -10 | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+fi
+
+run_test "curl CHACHA20 ECDSA -> our server" "Hello, world!" \
+    curl -s --cacert "$TMPDIR/ca.pem" --tlsv1.2 --tls-max 1.2 \
+    --ciphers ECDHE-ECDSA-CHACHA20-POLY1305 "https://localhost:$PORT/"
+
+stop_server
+
+echo ""
+echo "=== Test: ChaCha20-Poly1305 (RSA server) ==="
+PORT=$(get_port 14445)
+start_server "$PORT" "$TMPDIR/rsa_chain.pem" "$TMPDIR/rsa_server_key.pem"
+
+run_test "curl CHACHA20 RSA -> our server" "Hello, world!" \
+    curl -s --cacert "$TMPDIR/rsa_ca.pem" --tlsv1.2 --tls-max 1.2 \
+    --ciphers ECDHE-RSA-CHACHA20-POLY1305 "https://localhost:$PORT/"
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

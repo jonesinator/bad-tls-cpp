@@ -60,8 +60,8 @@ constexpr std::array<uint8_t, 48> derive_extended_master_secret(
 struct KeyBlock {
     std::array<uint8_t, 32> client_write_key{}; // up to AES-256 (32 bytes)
     std::array<uint8_t, 32> server_write_key{};
-    std::array<uint8_t, 4> client_write_iv{};   // GCM fixed IV
-    std::array<uint8_t, 4> server_write_iv{};
+    std::array<uint8_t, 12> client_write_iv{};  // AEAD fixed IV (4 for GCM, 12 for ChaCha20)
+    std::array<uint8_t, 12> server_write_iv{};
     size_t key_length = 0; // actual key bytes used (16 or 32)
 };
 
@@ -89,8 +89,8 @@ constexpr KeyBlock derive_key_block(
     constexpr uint8_t label[] = "key expansion";
 
     // Total key material needed: 2*key_length + 2*fixed_iv_length
-    // Max: 2*32 + 2*4 = 72 bytes
-    auto material = tls_prf<THash, 72>(
+    // Max: 2*32 + 2*12 = 88 bytes (ChaCha20-Poly1305)
+    auto material = tls_prf<THash, 88>(
         master_secret,
         std::span<const uint8_t>(label, 13),
         std::span<const uint8_t>(seed));
