@@ -238,6 +238,55 @@ inline bool verify_certificate_signature(
         return rsa_pkcs1_v1_5_verify<rsa_num, sha512_state>(*key, hash, sig);
     }
 
+    // RSA-PSS (RFC 4055): single OID with parameters encoding the hash
+    if (sig_oid == "1.2.840.113549.1.1.10") {
+        auto* key = std::get_if<rsa_public_key<rsa_num>>(&issuer_key);
+        if (!key) return false;
+        rsa_signature<rsa_num> sig{rsa_num::from_bytes(sig_bits.bytes)};
+
+        // Parse RSASSA-PSS-params to determine hash algorithm.
+        // Default is SHA-1 per RFC 4055, but in practice SHA-256/384/512 are used.
+        auto& params = cert.get<"signatureAlgorithm">().get<"parameters">();
+
+        // Determine hash from parameters (or default to SHA-256 if absent/unparseable)
+        // SHA-256 OID = 2.16.840.1.101.3.4.2.1
+        // SHA-384 OID = 2.16.840.1.101.3.4.2.2
+        // SHA-512 OID = 2.16.840.1.101.3.4.2.3
+        int pss_hash = 256;  // default: SHA-256
+        if (params.has_value()) {
+            // RSASSA-PSS-params ::= SEQUENCE {
+            //     hashAlgorithm     [0] EXPLICIT AlgorithmIdentifier DEFAULT sha1,
+            //     maskGenAlgorithm  [1] EXPLICIT AlgorithmIdentifier DEFAULT mgf1SHA1,
+            //     saltLength        [2] EXPLICIT INTEGER DEFAULT 20,
+            //     trailerField      [3] EXPLICIT INTEGER DEFAULT 1 }
+            der::Reader pr{params->raw_tlv};
+            auto seq_hdr = pr.read_header();  // outer SEQUENCE
+            if (seq_hdr.constructed) {
+                // Look for [0] EXPLICIT tag (context class = 0x80, constructed, tag 0)
+                if (pr.peek_matches(0x80, true, 0)) {
+                    auto tag0_hdr = pr.read_header();  // [0] EXPLICIT
+                    // Inside: AlgorithmIdentifier SEQUENCE { OID, ... }
+                    der::Reader alg_r{pr.read_content(tag0_hdr.length)};
+                    auto alg_seq_hdr = alg_r.read_header();  // SEQUENCE header
+                    if (alg_seq_hdr.constructed) {
+                        der::Reader inner{alg_r.read_content(alg_seq_hdr.length)};
+                        auto oid = inner.read_oid().to_string();
+                        if (oid == "2.16.840.1.101.3.4.2.2") pss_hash = 384;
+                        else if (oid == "2.16.840.1.101.3.4.2.3") pss_hash = 512;
+                    }
+                }
+            }
+        }
+
+        if (pss_hash == 256)
+            return rsa_pss_verify<rsa_num, sha256_state>(*key, sha256(tbs_bytes), sig);
+        if (pss_hash == 384)
+            return rsa_pss_verify<rsa_num, sha384_state>(*key, sha384(tbs_bytes), sig);
+        if (pss_hash == 512)
+            return rsa_pss_verify<rsa_num, sha512_state>(*key, sha512(tbs_bytes), sig);
+        return false;
+    }
+
     // ECDSA + SHA-256 (P-256 or P-384 key)
     if (sig_oid == "1.2.840.10045.4.3.2") {
         auto hash = sha256(tbs_bytes);
