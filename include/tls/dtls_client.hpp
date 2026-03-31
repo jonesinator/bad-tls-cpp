@@ -40,13 +40,15 @@ struct dtls_client_config {
     std::array<NamedCurve, 3> curves = {NamedCurve::x25519, NamedCurve::secp256r1, NamedCurve::secp384r1};
     size_t num_curves = 3;
 
-    std::array<SignatureAndHashAlgorithm, 4> sig_algs = {{
+    std::array<SignatureAndHashAlgorithm, 6> sig_algs = {{
         {HashAlgorithm::sha256, SignatureAlgorithm::ecdsa},
         {HashAlgorithm::sha384, SignatureAlgorithm::ecdsa},
+        {HashAlgorithm::rsa_pss, SignatureAlgorithm(4)},   // rsa_pss_rsae_sha256
+        {HashAlgorithm::rsa_pss, SignatureAlgorithm(5)},   // rsa_pss_rsae_sha384
         {HashAlgorithm::sha256, SignatureAlgorithm::rsa},
         {HashAlgorithm::sha384, SignatureAlgorithm::rsa},
     }};
-    size_t num_sig_algs = 4;
+    size_t num_sig_algs = 6;
 
     const asn1::x509::trust_store* trust = nullptr;
     std::string_view hostname;

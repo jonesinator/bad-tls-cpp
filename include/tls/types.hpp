@@ -93,11 +93,12 @@ enum class NamedCurve : uint16_t {
     x25519    = 29,
 };
 
-// RFC 5246 Section 7.4.1.4.1
+// RFC 5246 Section 7.4.1.4.1, RFC 8446 Section 4.2.3
 enum class HashAlgorithm : uint8_t {
-    sha256 = 4,
-    sha384 = 5,
-    sha512 = 6,
+    sha256  = 4,
+    sha384  = 5,
+    sha512  = 6,
+    rsa_pss = 8,  // RSA-PSS scheme — "signature" byte encodes the hash
 };
 
 enum class SignatureAlgorithm : uint8_t {
@@ -110,6 +111,16 @@ struct SignatureAndHashAlgorithm {
     SignatureAlgorithm signature;
     constexpr bool operator==(const SignatureAndHashAlgorithm&) const = default;
 };
+
+// RSA-PSS SignatureScheme helpers (RFC 8446 Section 4.2.3)
+// Wire encoding: rsa_pss_rsae_sha256 = 0x0804, sha384 = 0x0805, sha512 = 0x0806
+// In SignatureAndHashAlgorithm: hash = rsa_pss (0x08), signature byte = hash id (4/5/6)
+constexpr bool is_rsa_pss_scheme(SignatureAndHashAlgorithm alg) noexcept {
+    return alg.hash == HashAlgorithm::rsa_pss;
+}
+constexpr HashAlgorithm rsa_pss_actual_hash(SignatureAndHashAlgorithm alg) noexcept {
+    return static_cast<HashAlgorithm>(static_cast<uint8_t>(alg.signature));
+}
 
 // RFC 5246 Section 7.4.1.2 — 32 bytes of randomness (caller-provided)
 using Random = std::array<uint8_t, 32>;

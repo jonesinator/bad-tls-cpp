@@ -374,10 +374,10 @@ private:
         return ske;
     }
 
-    template <typename THash>
+    template <typename THash, random_generator R>
     ServerKeyExchangeEcdhe build_server_key_exchange_rsa(
         NamedCurve curve, const asn1::FixedVector<uint8_t, 133>& ecdhe_pub,
-        const rsa_private_key<asn1::x509::rsa_num>& signing_key)
+        const rsa_private_key<asn1::x509::rsa_num>& signing_key, R& rng)
     {
         ServerKeyExchangeEcdhe ske{};
         ske.named_curve = curve;
@@ -385,11 +385,12 @@ private:
         auto [signed_data, pos] = build_ske_signed_data(client_random_, server_random_, curve, ecdhe_pub);
         auto data_span = std::span<const uint8_t>(signed_data.data(), pos);
         THash h; h.init(); h.update(data_span); auto hash = h.finalize();
-        auto sig = rsa_pkcs1_v1_5_sign<asn1::x509::rsa_num, THash>(signing_key, hash);
+        auto salt = random_bytes<THash::digest_size>(rng);
+        auto sig = rsa_pss_sign<asn1::x509::rsa_num, THash>(signing_key, hash, salt);
         if constexpr (THash::digest_size == 32)
-            ske.sig_algorithm = {HashAlgorithm::sha256, SignatureAlgorithm::rsa};
+            ske.sig_algorithm = {HashAlgorithm::rsa_pss, SignatureAlgorithm(4)};
         else
-            ske.sig_algorithm = {HashAlgorithm::sha384, SignatureAlgorithm::rsa};
+            ske.sig_algorithm = {HashAlgorithm::rsa_pss, SignatureAlgorithm(5)};
         auto sig_bytes = sig.value.to_bytes(std::endian::big);
         size_t mod_bytes = (signing_key.n.bit_width() + 7) / 8;
         size_t offset = sig_bytes.size() - mod_bytes;
@@ -527,7 +528,7 @@ private:
             if (is_rsa_key) {
                 auto* rsa_key = std::get_if<rsa_private_key<rsa_num>>(&config_.private_key);
                 if (!rsa_key) return {tls_error::internal_error};
-                ske = build_server_key_exchange_rsa<Hash>(curve, pub_bytes, *rsa_key);
+                ske = build_server_key_exchange_rsa<Hash>(curve, pub_bytes, *rsa_key, rng_);
             } else {
                 if (config_.private_key_curve == NamedCurve::secp256r1) {
                     auto* signing_key = std::get_if<asn1::x509::p256_curve::number_type>(&config_.private_key);
@@ -704,6 +705,13 @@ private:
                     auto sig = asn1::x509::detail::parse_ecdsa_signature<asn1::x509::p384_curve>(
                         std::span<const uint8_t>(sig_data.data(), sig_len));
                     sig_ok = ecdsa_verify<asn1::x509::p384_curve, Hash>(*key, pre_cv_hash, sig);
+                }
+            } else if (is_rsa_pss_scheme(cv_alg)) {
+                auto* key = std::get_if<rsa_public_key<asn1::x509::rsa_num>>(&client_pub_key);
+                if (key) {
+                    rsa_signature<asn1::x509::rsa_num> sig{
+                        asn1::x509::rsa_num::from_bytes(std::span<const uint8_t>(sig_data.data(), sig_len))};
+                    sig_ok = rsa_pss_verify<asn1::x509::rsa_num, Hash>(*key, pre_cv_hash, sig);
                 }
             } else if (cv_alg.signature == SignatureAlgorithm::rsa) {
                 auto* key = std::get_if<rsa_public_key<asn1::x509::rsa_num>>(&client_pub_key);

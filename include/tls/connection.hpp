@@ -317,6 +317,20 @@ inline bool verify_server_key_exchange(
         signed_data[pos++] = ske.public_key[i];
     auto data_span = std::span<const uint8_t>(signed_data.data(), pos);
 
+    if (is_rsa_pss_scheme(ske.sig_algorithm)) {
+        auto* key = std::get_if<rsa_public_key<asn1::x509::rsa_num>>(&server_pub_key);
+        if (!key) return false;
+        rsa_signature<asn1::x509::rsa_num> sig{
+            asn1::x509::rsa_num::from_bytes(
+                std::span<const uint8_t>(ske.signature.data.data(), ske.signature.len))};
+        auto actual_hash = rsa_pss_actual_hash(ske.sig_algorithm);
+        if (actual_hash == HashAlgorithm::sha256)
+            return rsa_pss_verify<asn1::x509::rsa_num, sha256_state>(*key, sha256(data_span), sig);
+        if (actual_hash == HashAlgorithm::sha384)
+            return rsa_pss_verify<asn1::x509::rsa_num, sha384_state>(*key, sha384(data_span), sig);
+        return false;
+    }
+
     if (ske.sig_algorithm.signature == SignatureAlgorithm::rsa) {
         auto* key = std::get_if<rsa_public_key<asn1::x509::rsa_num>>(&server_pub_key);
         if (!key) return false;
