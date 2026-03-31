@@ -1,5 +1,6 @@
 #include <tls/handshake.hpp>
 #include <tls/session_cache.hpp>
+#include <crypto/random.hpp>
 #include <cassert>
 
 void test_client_hello_serialize() {
@@ -358,6 +359,116 @@ void test_session_cache_replace_existing() {
     assert(found->negotiated_protocol == "http/1.1");
 }
 
+void test_new_session_ticket_roundtrip() {
+    // Build a NewSessionTicket
+    tls::NewSessionTicket nst;
+    nst.ticket_lifetime_hint = 7200;
+    nst.ticket = {0x01, 0x02, 0x03, 0x04, 0x05, 0xAA, 0xBB, 0xCC};
+
+    tls::TlsWriter<128> w;
+    tls::write_new_session_ticket(w, nst);
+
+    auto data = w.data();
+    // Header: type(1) + length(3) + lifetime(4) + ticket_len(2) + ticket(8) = 18 bytes
+    assert(data[0] == static_cast<uint8_t>(tls::HandshakeType::new_session_ticket));
+    uint32_t body_len = (uint32_t(data[1]) << 16) | (uint32_t(data[2]) << 8) | data[3];
+    assert(body_len == 4 + 2 + 8);
+
+    // Parse body (skip header)
+    tls::TlsReader r(std::span<const uint8_t>(data.data() + 4, body_len));
+    auto parsed = tls::read_new_session_ticket(r);
+    assert(parsed.ticket_lifetime_hint == 7200);
+    assert(parsed.ticket.size() == 8);
+    assert(parsed.ticket[0] == 0x01);
+    assert(parsed.ticket[5] == 0xAA);
+}
+
+void test_ticket_encrypt_decrypt_roundtrip() {
+    // Set up a ticket key
+    tls::ticket_key key;
+    for (uint8_t i = 0; i < 16; ++i) key.key_name[i] = i;
+    for (uint8_t i = 0; i < 16; ++i) key.aes_key[i] = static_cast<uint8_t>(0x42 + i);
+
+    // Build session data
+    tls::session_data sd;
+    sd.cipher_suite = tls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256;
+    sd.use_extended_master_secret = true;
+    for (uint8_t i = 0; i < 48; ++i) sd.master_secret[i] = i;
+    sd.negotiated_protocol = "h2";
+
+    // Encrypt
+    system_random rng;
+    auto ticket = tls::encrypt_ticket(key, sd, rng);
+    assert(ticket.size() >= tls::TICKET_OVERHEAD + 53); // min plaintext = 2+1+48+2
+
+    // Decrypt
+    auto result = tls::decrypt_ticket(key, ticket);
+    assert(result.has_value());
+    assert(result->cipher_suite == sd.cipher_suite);
+    assert(result->use_extended_master_secret == true);
+    assert(result->master_secret == sd.master_secret);
+    assert(result->negotiated_protocol == "h2");
+}
+
+void test_ticket_decrypt_wrong_key() {
+    tls::ticket_key key;
+    for (uint8_t i = 0; i < 16; ++i) key.key_name[i] = i;
+    for (uint8_t i = 0; i < 16; ++i) key.aes_key[i] = static_cast<uint8_t>(0x42 + i);
+
+    tls::session_data sd;
+    sd.cipher_suite = tls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256;
+    for (uint8_t i = 0; i < 48; ++i) sd.master_secret[i] = i;
+
+    system_random rng;
+    auto ticket = tls::encrypt_ticket(key, sd, rng);
+
+    // Wrong key_name → should fail
+    tls::ticket_key wrong_key;
+    for (uint8_t i = 0; i < 16; ++i) wrong_key.key_name[i] = static_cast<uint8_t>(0xFF - i);
+    for (uint8_t i = 0; i < 16; ++i) wrong_key.aes_key[i] = static_cast<uint8_t>(0x42 + i);
+    assert(!tls::decrypt_ticket(wrong_key, ticket).has_value());
+
+    // Wrong AES key → should fail (GCM auth check)
+    tls::ticket_key wrong_aes;
+    for (uint8_t i = 0; i < 16; ++i) wrong_aes.key_name[i] = i;
+    for (uint8_t i = 0; i < 16; ++i) wrong_aes.aes_key[i] = static_cast<uint8_t>(0x99 + i);
+    assert(!tls::decrypt_ticket(wrong_aes, ticket).has_value());
+}
+
+void test_session_ticket_extension_in_client_hello() {
+    constexpr auto test = [] {
+        // Build extensions with a session ticket
+        tls::TlsWriter<768> ext_w;
+        std::array<tls::NamedCurve, 1> curves = {tls::NamedCurve::secp256r1};
+        std::array<tls::SignatureAndHashAlgorithm, 1> sig_algs = {{
+            {tls::HashAlgorithm::sha256, tls::SignatureAlgorithm::ecdsa},
+        }};
+        std::array<uint8_t, 4> ticket = {0xDE, 0xAD, 0xBE, 0xEF};
+        tls::write_client_hello_extensions(ext_w, curves, sig_algs, {}, {}, ticket);
+
+        // Scan for session_ticket extension (type 35)
+        auto data = ext_w.data();
+        tls::TlsReader r(data);
+        r.read_u16(); // total extensions length
+        bool found = false;
+        while (r.remaining() >= 4) {
+            uint16_t ext_type = r.read_u16();
+            uint16_t ext_len = r.read_u16();
+            if (ext_type == 35) {
+                found = true;
+                if (ext_len != 4) throw "wrong ticket extension length";
+                auto td = r.read_bytes(ext_len);
+                if (td[0] != 0xDE || td[3] != 0xEF) throw "wrong ticket data";
+            } else {
+                if (ext_len > 0) r.read_bytes(ext_len);
+            }
+        }
+        if (!found) throw "session_ticket extension not found";
+        return true;
+    };
+    static_assert(test());
+}
+
 int main() {
     test_client_hello_serialize();
     test_server_hello_parse();
@@ -372,5 +483,9 @@ int main() {
     test_session_cache_remove();
     test_session_cache_eviction();
     test_session_cache_replace_existing();
+    test_new_session_ticket_roundtrip();
+    test_ticket_encrypt_decrypt_roundtrip();
+    test_ticket_decrypt_wrong_key();
+    test_session_ticket_extension_in_client_hello();
     return 0;
 }

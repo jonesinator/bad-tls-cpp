@@ -30,6 +30,7 @@ int main(int argc, char* argv[]) {
     const char* cafile = nullptr;
     const char* certfile = nullptr;
     const char* keyfile = nullptr;
+    const char* ticket_file = nullptr;
     const char* hostname_arg = nullptr;
     const char* port_arg = nullptr;
 
@@ -44,6 +45,9 @@ int main(int argc, char* argv[]) {
         } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
             keyfile = argv[++i];
             ++i;
+        } else if (std::strcmp(argv[i], "--ticket-file") == 0 && i + 1 < argc) {
+            ticket_file = argv[++i];
+            ++i;
         } else if (!hostname_arg) {
             hostname_arg = argv[i++];
         } else if (!port_arg) {
@@ -56,7 +60,7 @@ int main(int argc, char* argv[]) {
     if (!hostname_arg) {
         std::fprintf(stderr,
             "Usage: %s [--cafile <ca.pem>] [--cert <cert.pem>] [--key <key.pem>] "
-            "<hostname> [port]\n", argv[0]);
+            "[--ticket-file <file>] <hostname> [port]\n", argv[0]);
         return 1;
     }
 
@@ -128,6 +132,34 @@ int main(int argc, char* argv[]) {
     }
     std::printf("TCP connected\n");
 
+    // Load session ticket for resumption (if file exists)
+    std::vector<uint8_t> ticket_data;
+    tls::session_data resume_sd;
+    bool have_ticket = false;
+    if (ticket_file) {
+        std::ifstream tf(ticket_file, std::ios::binary);
+        if (tf) {
+            // Ticket file format: master_secret(48) + cipher_suite(2) + ticket_len(2) + ticket(var)
+            std::array<uint8_t, 48> ms;
+            tf.read(reinterpret_cast<char*>(ms.data()), 48);
+            uint8_t cs_hi = 0, cs_lo = 0;
+            tf.read(reinterpret_cast<char*>(&cs_hi), 1);
+            tf.read(reinterpret_cast<char*>(&cs_lo), 1);
+            uint8_t tl_hi = 0, tl_lo = 0;
+            tf.read(reinterpret_cast<char*>(&tl_hi), 1);
+            tf.read(reinterpret_cast<char*>(&tl_lo), 1);
+            uint16_t tl = static_cast<uint16_t>((tl_hi << 8) | tl_lo);
+            ticket_data.resize(tl);
+            tf.read(reinterpret_cast<char*>(ticket_data.data()), tl);
+            if (tf) {
+                resume_sd.master_secret = ms;
+                resume_sd.cipher_suite = static_cast<tls::CipherSuite>((cs_hi << 8) | cs_lo);
+                have_ticket = true;
+                std::printf("Loaded session ticket (%zu bytes) for resumption\n", ticket_data.size());
+            }
+        }
+    }
+
     system_random rng;
     tls::client_config cfg;
     cfg.trust = &roots;
@@ -136,6 +168,10 @@ int main(int argc, char* argv[]) {
         cfg.client_certificate_chain = client_cert_chain;
         cfg.client_private_key = client_loaded.key;
         cfg.client_key_curve = client_loaded.curve;
+    }
+    if (have_ticket) {
+        cfg.session_ticket = ticket_data;
+        cfg.resume_session = &resume_sd;
     }
 
     tls::tls_client client(conn, rng, cfg);
@@ -147,6 +183,28 @@ int main(int argc, char* argv[]) {
     }
     std::printf("TLS handshake complete! Suite: 0x%04X\n",
                 static_cast<unsigned>(client.negotiated_suite()));
+
+    // Save received ticket for future resumption
+    if (ticket_file && !client.received_ticket().empty()) {
+        std::ofstream tf(ticket_file, std::ios::binary | std::ios::trunc);
+        if (tf) {
+            // File format: master_secret(48) + cipher_suite(2) + ticket_len(2) + ticket(var)
+            auto& ms = client.master_secret();
+            tf.write(reinterpret_cast<const char*>(ms.data()), 48);
+            uint16_t cs = static_cast<uint16_t>(client.negotiated_suite());
+            uint8_t cs_hi = static_cast<uint8_t>(cs >> 8);
+            uint8_t cs_lo = static_cast<uint8_t>(cs);
+            tf.write(reinterpret_cast<const char*>(&cs_hi), 1);
+            tf.write(reinterpret_cast<const char*>(&cs_lo), 1);
+            auto& ticket = client.received_ticket();
+            uint8_t tl_hi = static_cast<uint8_t>(ticket.size() >> 8);
+            uint8_t tl_lo = static_cast<uint8_t>(ticket.size());
+            tf.write(reinterpret_cast<const char*>(&tl_hi), 1);
+            tf.write(reinterpret_cast<const char*>(&tl_lo), 1);
+            tf.write(reinterpret_cast<const char*>(ticket.data()), static_cast<std::streamsize>(ticket.size()));
+            std::printf("Saved session ticket (%zu bytes) to %s\n", ticket.size(), ticket_file);
+        }
+    }
 
     // Send HTTP/1.1 GET request
     std::string request = "GET / HTTP/1.1\r\nHost: " + hostname +

@@ -57,6 +57,9 @@ struct server_config {
 
     // Session resumption — pointer to external session cache (nullptr = no caching)
     session_cache* session_store = nullptr;
+
+    // Session tickets (RFC 5077) — pointer to ticket encryption key (nullptr = no tickets)
+    const ticket_key* session_ticket_key = nullptr;
 };
 
 template <transport Transport, random_generator RNG>
@@ -118,14 +121,21 @@ public:
         }
         if (!suite_found) return {tls_error::handshake_failure};
 
-        // Parse ClientHello extensions for ALPN (RFC 7301)
-        if (!config_.alpn_protocols.empty() && client_hello.extensions.size() > 0) {
+        // Parse ClientHello extensions for ALPN (RFC 7301) and session_ticket (RFC 5077)
+        std::vector<uint8_t> client_ticket;
+        bool client_supports_tickets = false;
+        if (client_hello.extensions.size() > 0) {
             TlsReader ext_r(std::span<const uint8_t>(
                 client_hello.extensions.data.data(), client_hello.extensions.len));
+            bool alpn_matched = false;
             while (ext_r.remaining() >= 4) {
                 uint16_t ext_type = ext_r.read_u16();
                 uint16_t ext_len = ext_r.read_u16();
                 if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 2) {
+                    if (config_.alpn_protocols.empty()) {
+                        if (ext_len > 0) ext_r.read_bytes(ext_len);
+                        continue;
+                    }
                     auto alpn_data = ext_r.read_bytes(ext_len);
                     TlsReader alpn_r(alpn_data);
                     uint16_t list_len = alpn_r.read_u16();
@@ -141,23 +151,55 @@ public:
                         for (size_t k = 0; k < config_.alpn_protocols.size(); ++k) {
                             if (config_.alpn_protocols[k] == client_proto) {
                                 negotiated_protocol_ = std::string(client_proto);
-                                goto alpn_done;
+                                alpn_matched = true;
+                                break;
                             }
                         }
+                        if (alpn_matched) break;
                     }
-                    // Client sent ALPN but no match — fatal error per RFC 7301
-                    return {tls_error::handshake_failure};
+                    if (!alpn_matched && !config_.alpn_protocols.empty()) {
+                        // Client sent ALPN but no match — fatal error per RFC 7301
+                        return {tls_error::handshake_failure};
+                    }
+                } else if (ext_type == static_cast<uint16_t>(ExtensionType::session_ticket)) {
+                    client_supports_tickets = true;
+                    if (ext_len > 0) {
+                        auto ticket_data = ext_r.read_bytes(ext_len);
+                        client_ticket.assign(ticket_data.begin(), ticket_data.end());
+                    }
                 } else {
                     if (ext_len > 0) ext_r.read_bytes(ext_len);
                 }
             }
         }
-        alpn_done:
 
         // Buffer ClientHello for transcript (full handshake message including header)
         size_t ch_msg_len = 4 + ch_hdr.length;
 
-        // Check for session resumption (RFC 5246 Section 7.4.1.2)
+        // Check for session ticket resumption (RFC 5077) — takes priority over session_id
+        if (config_.session_ticket_key && !client_ticket.empty()) {
+            auto ticket_session = decrypt_ticket(*config_.session_ticket_key, client_ticket);
+            if (ticket_session) {
+                // Verify client still offers the cached cipher suite
+                bool cached_suite_ok = false;
+                for (size_t j = 0; j < client_hello.cipher_suites.size(); ++j) {
+                    if (ticket_session->cipher_suite == client_hello.cipher_suites[j]) {
+                        cached_suite_ok = true;
+                        break;
+                    }
+                }
+                if (cached_suite_ok) {
+                    negotiated_suite_ = ticket_session->cipher_suite;
+                    return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
+                        return handshake_abbreviated<Traits>(
+                            std::span<const uint8_t>(ch_frag.data(), ch_msg_len),
+                            *ticket_session, client_supports_tickets);
+                    });
+                }
+            }
+        }
+
+        // Check for session ID resumption (RFC 5246 Section 7.4.1.2)
         if (config_.session_store && client_hello.session_id.length > 0) {
             auto* cached = config_.session_store->find(client_hello.session_id);
             if (cached) {
@@ -173,7 +215,8 @@ public:
                     negotiated_suite_ = cached->cipher_suite;
                     return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
                         return handshake_abbreviated<Traits>(
-                            std::span<const uint8_t>(ch_frag.data(), ch_msg_len), *cached);
+                            std::span<const uint8_t>(ch_frag.data(), ch_msg_len),
+                            *cached, client_supports_tickets);
                     });
                 }
             }
@@ -182,7 +225,8 @@ public:
         // Phase 2: dispatch into templated continuation (full handshake)
         return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
             return handshake_continue<Traits>(
-                std::span<const uint8_t>(ch_frag.data(), ch_msg_len));
+                std::span<const uint8_t>(ch_frag.data(), ch_msg_len),
+                client_supports_tickets);
         });
     }
 
@@ -405,7 +449,8 @@ private:
     }
 
     template <typename Traits>
-    tls_result<void> handshake_continue(std::span<const uint8_t> client_hello_bytes) {
+    tls_result<void> handshake_continue(std::span<const uint8_t> client_hello_bytes,
+                                        bool client_supports_tickets = false) {
         using Hash = typename Traits::hash_type;
 
         // Initialize transcript with ClientHello
@@ -450,6 +495,12 @@ private:
                 ext_w.write_bytes(std::span<const uint8_t>(
                     reinterpret_cast<const uint8_t*>(negotiated_protocol_.data()),
                     negotiated_protocol_.size()));
+            }
+
+            // session_ticket (RFC 5077) — empty extension signals we will send a ticket
+            if (client_supports_tickets && config_.session_ticket_key) {
+                ext_w.write_u16(static_cast<uint16_t>(ExtensionType::session_ticket));
+                ext_w.write_u16(0); // empty extension data
             }
 
             // Patch total extensions length
@@ -724,6 +775,25 @@ private:
         transcript.update(std::span<const uint8_t>(
             cfin_rec.value.fragment.data.data(), cfin_rec.value.fragment.size()));
 
+        // --- Send NewSessionTicket (RFC 5077) ---
+        if (client_supports_tickets && config_.session_ticket_key) {
+            session_data ticket_sd;
+            ticket_sd.cipher_suite = negotiated_suite_;
+            ticket_sd.master_secret = master_secret_;
+            ticket_sd.use_extended_master_secret = false;
+            ticket_sd.negotiated_protocol = negotiated_protocol_;
+            auto ticket_bytes = encrypt_ticket(*config_.session_ticket_key, ticket_sd, rng_);
+
+            NewSessionTicket nst;
+            nst.ticket_lifetime_hint = 7200; // 2 hours
+            nst.ticket = std::move(ticket_bytes);
+            TlsWriter<1024> nst_w;
+            write_new_session_ticket(nst_w, nst);
+            transcript.update(nst_w.data());
+            auto nst_err = rio_.send_record(ContentType::handshake, nst_w.data());
+            if (!nst_err) return {nst_err.error};
+        }
+
         // --- Send ChangeCipherSpec ---
         std::array<uint8_t, 1> ccs = {CHANGE_CIPHER_SPEC_MESSAGE};
         auto ccs_err = rio_.send_record(ContentType::change_cipher_spec, ccs);
@@ -754,12 +824,14 @@ private:
         return {tls_error::ok};
     }
 
-    // Abbreviated handshake for session resumption (RFC 5246 Section 7.4.1.2)
-    // Server sends: ServerHello → CCS → Finished, then receives: CCS → Finished
+    // Abbreviated handshake for session resumption (RFC 5246 Section 7.4.1.2, RFC 5077)
+    // Server sends: ServerHello → [NewSessionTicket] → CCS → Finished,
+    // then receives: CCS → Finished
     template <typename Traits>
     tls_result<void> handshake_abbreviated(
         std::span<const uint8_t> client_hello_bytes,
-        const session_data& cached)
+        const session_data& cached,
+        bool client_supports_tickets = false)
     {
         using Hash = typename Traits::hash_type;
 
@@ -799,6 +871,12 @@ private:
                     cached.negotiated_protocol.size()));
             }
 
+            // session_ticket (RFC 5077) — signal we will send a ticket
+            if (client_supports_tickets && config_.session_ticket_key) {
+                ext_w.write_u16(static_cast<uint16_t>(ExtensionType::session_ticket));
+                ext_w.write_u16(0);
+            }
+
             uint16_t total = static_cast<uint16_t>(ext_w.position() - ext_list_pos - 2);
             ext_w.patch_u16(ext_list_pos, total);
 
@@ -811,6 +889,25 @@ private:
         transcript.update(sh_w.data());
         auto sh_err = rio_.send_record(ContentType::handshake, sh_w.data());
         if (!sh_err) return {sh_err.error};
+
+        // --- Send NewSessionTicket (RFC 5077) — refresh ticket on resumption ---
+        if (client_supports_tickets && config_.session_ticket_key) {
+            session_data ticket_sd;
+            ticket_sd.cipher_suite = negotiated_suite_;
+            ticket_sd.master_secret = master_secret_;
+            ticket_sd.use_extended_master_secret = cached.use_extended_master_secret;
+            ticket_sd.negotiated_protocol = cached.negotiated_protocol;
+            auto ticket_bytes = encrypt_ticket(*config_.session_ticket_key, ticket_sd, rng_);
+
+            NewSessionTicket nst;
+            nst.ticket_lifetime_hint = 7200;
+            nst.ticket = std::move(ticket_bytes);
+            TlsWriter<1024> nst_w;
+            write_new_session_ticket(nst_w, nst);
+            transcript.update(nst_w.data());
+            auto nst_err = rio_.send_record(ContentType::handshake, nst_w.data());
+            if (!nst_err) return {nst_err.error};
+        }
 
         // Derive fresh key block with new randoms
         auto params = get_cipher_suite_params(negotiated_suite_);

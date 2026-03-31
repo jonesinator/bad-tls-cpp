@@ -275,6 +275,35 @@ run_test "curl RSA client with ECDSA server -> Hello, secure!" "Hello, secure!" 
 
 stop_server
 
+# ========== Test 7: Session Tickets ==========
+echo ""
+echo "=== Test: Session Tickets (RFC 5077) ==="
+PORT=$(get_port 14439)
+start_server "$PORT" --ticket-key "$TMPDIR/chain.pem" "$TMPDIR/server_key.pem"
+
+TICKET_FILE="$TMPDIR/session_ticket.bin"
+
+# First connection: full handshake, should receive a ticket
+run_test "first connect (full handshake) -> Hello, world!" "Hello, world!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" --ticket-file "$TICKET_FILE" localhost "$PORT"
+
+# Verify ticket file was created
+TOTAL=$((TOTAL + 1))
+printf "  %-55s " "ticket file saved"
+if [ -f "$TICKET_FILE" ] && [ -s "$TICKET_FILE" ]; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL (ticket file not created)"
+    FAIL=$((FAIL + 1))
+fi
+
+# Second connection: should resume via ticket
+run_test "second connect (ticket resumption) -> Hello, world!" "Hello, world!" \
+    "$CLIENT_TOOL" --cafile "$TMPDIR/ca.pem" --ticket-file "$TICKET_FILE" localhost "$PORT"
+
+stop_server
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

@@ -62,6 +62,9 @@ struct client_config {
     // Session resumption — RFC 5246 Section 7.4.1.2
     session_cache* session_store = nullptr;         // store sessions after full handshake
     const session_data* resume_session = nullptr;   // session to attempt resuming
+
+    // Session tickets (RFC 5077) — ticket data for resumption (empty = signal support only)
+    std::span<const uint8_t> session_ticket;
 };
 
 template <transport Transport, random_generator RNG>
@@ -77,6 +80,8 @@ class tls_client {
     bool handshake_complete_ = false;
     std::string negotiated_protocol_;
     SessionId server_hello_session_id_{};
+    std::vector<uint8_t> received_ticket_;
+    bool server_will_send_ticket_ = false;
 
 public:
     constexpr tls_client(Transport& t, RNG& rng, const client_config& cfg = {})
@@ -98,12 +103,13 @@ public:
         ch.compression_methods.push_back(CompressionMethod::null);
 
         // Build extensions
-        TlsWriter<512> ext_w;
+        TlsWriter<768> ext_w;
         write_client_hello_extensions(ext_w,
             std::span<const NamedCurve>(config_.curves.data(), config_.num_curves),
             std::span<const SignatureAndHashAlgorithm>(config_.sig_algs.data(), config_.num_sig_algs),
             config_.hostname,
-            config_.alpn_protocols);
+            config_.alpn_protocols,
+            config_.session_ticket);
         for (size_t i = 0; i < ext_w.size(); ++i)
             ch.extensions.push_back(ext_w.data()[i]);
 
@@ -157,6 +163,10 @@ public:
                 uint16_t ext_len = ext_r.read_u16();
                 if (ext_type == static_cast<uint16_t>(ExtensionType::extended_master_secret)) {
                     use_ems = true;
+                } else if (ext_type == static_cast<uint16_t>(ExtensionType::session_ticket)) {
+                    server_will_send_ticket_ = true;
+                    if (ext_len > 0) ext_r.read_bytes(ext_len);
+                    continue;
                 } else if (ext_type == static_cast<uint16_t>(ExtensionType::application_layer_protocol_negotiation) && ext_len >= 4) {
                     // RFC 7301: ProtocolNameList with exactly one entry
                     auto alpn_data = ext_r.read_bytes(ext_len);
@@ -176,10 +186,29 @@ public:
             }
         }
 
-        // Detect abbreviated handshake: server echoed our session_id
-        bool resuming = config_.resume_session &&
+        // Detect abbreviated handshake:
+        // 1. Session ticket resumption (RFC 5077): we sent a ticket and server accepted
+        // 2. Session ID resumption (RFC 5246): server echoed our session_id
+        bool resuming_ticket = !config_.session_ticket.empty() && server_will_send_ticket_;
+        bool resuming_id = config_.resume_session &&
             server_hello.session_id.length > 0 &&
             server_hello.session_id == config_.resume_session->session_id;
+        bool resuming = resuming_ticket || resuming_id;
+
+        // For ticket resumption, build a session_data from the ticket config
+        session_data ticket_resume_data;
+        if (resuming_ticket && config_.resume_session) {
+            ticket_resume_data = *config_.resume_session;
+            ticket_resume_data.cipher_suite = negotiated_suite_;
+        } else if (resuming_ticket) {
+            // Resuming via ticket without resume_session — shouldn't happen in normal flow,
+            // but the master_secret etc. must come from somewhere (the server decrypts the ticket)
+            // The client must have stored this data alongside the ticket.
+        }
+
+        const session_data& resume_data = resuming_ticket
+            ? (config_.resume_session ? *config_.resume_session : ticket_resume_data)
+            : (config_.resume_session ? *config_.resume_session : ticket_resume_data);
 
         // Collect any leftover bytes in the record (additional handshake messages)
         asn1::FixedVector<uint8_t, MAX_PLAINTEXT_LENGTH> leftover;
@@ -190,7 +219,7 @@ public:
         // Phase 2: dispatch into templated continuation
         return dispatch_cipher_suite(negotiated_suite_, [&]<typename Traits>() {
             if (resuming)
-                return handshake_abbreviated<Traits>(early_transcript, *config_.resume_session);
+                return handshake_abbreviated<Traits>(early_transcript, resume_data);
             return handshake_continue<Traits>(early_transcript, leftover, use_ems);
         });
     }
@@ -232,6 +261,8 @@ public:
     constexpr bool is_connected() const { return handshake_complete_; }
     constexpr CipherSuite negotiated_suite() const { return negotiated_suite_; }
     std::string_view negotiated_protocol() const { return negotiated_protocol_; }
+    const std::vector<uint8_t>& received_ticket() const { return received_ticket_; }
+    const std::array<uint8_t, 48>& master_secret() const { return master_secret_; }
 
 private:
     template <typename Num>
@@ -473,6 +504,24 @@ private:
         auto fin_err = rio_.send_record(ContentType::handshake, fin_w.data());
         if (!fin_err) return {fin_err.error};
 
+        // --- Receive NewSessionTicket (RFC 5077) if server indicated support ---
+        if (server_will_send_ticket_) {
+            auto nst_rec = rio_.recv_record();
+            if (!nst_rec) return {nst_rec.error};
+            if (nst_rec.value.type != ContentType::handshake)
+                return {tls_error::unexpected_message};
+
+            auto nst_frag = std::span<const uint8_t>(
+                nst_rec.value.fragment.data.data(), nst_rec.value.fragment.size());
+            TlsReader nst_r(nst_frag);
+            auto nst_hdr = read_handshake_header(nst_r);
+            if (nst_hdr.type != HandshakeType::new_session_ticket)
+                return {tls_error::unexpected_message};
+            auto nst = read_new_session_ticket(nst_r);
+            received_ticket_ = std::move(nst.ticket);
+            transcript.update(nst_frag);
+        }
+
         // --- Receive server ChangeCipherSpec ---
         auto server_ccs = rio_.recv_record();
         if (!server_ccs) return {server_ccs.error};
@@ -508,6 +557,7 @@ private:
             sd.master_secret = master_secret_;
             sd.use_extended_master_secret = use_ems;
             sd.negotiated_protocol = negotiated_protocol_;
+            sd.ticket = received_ticket_;
             config_.session_store->store(sd);
         }
 
@@ -515,8 +565,8 @@ private:
         return {tls_error::ok};
     }
 
-    // Abbreviated handshake for session resumption (RFC 5246 Section 7.4.1.2)
-    // Server sends CCS+Finished first, then client sends CCS+Finished
+    // Abbreviated handshake for session resumption (RFC 5246 Section 7.4.1.2, RFC 5077)
+    // Server sends [NewSessionTicket] → CCS → Finished first, then client sends CCS → Finished
     template <typename Traits>
     constexpr tls_result<void> handshake_abbreviated(
         const asn1::FixedVector<uint8_t, 4096>& early_bytes,
@@ -534,6 +584,24 @@ private:
         // Initialize transcript with ClientHello + ServerHello
         TranscriptHash<Hash> transcript;
         transcript.update(std::span<const uint8_t>(early_bytes.data.data(), early_bytes.len));
+
+        // --- Receive optional NewSessionTicket (RFC 5077) ---
+        if (server_will_send_ticket_) {
+            auto nst_rec = rio_.recv_record();
+            if (!nst_rec) return {nst_rec.error};
+            if (nst_rec.value.type != ContentType::handshake)
+                return {tls_error::unexpected_message};
+
+            auto nst_frag = std::span<const uint8_t>(
+                nst_rec.value.fragment.data.data(), nst_rec.value.fragment.size());
+            TlsReader nst_r(nst_frag);
+            auto nst_hdr = read_handshake_header(nst_r);
+            if (nst_hdr.type != HandshakeType::new_session_ticket)
+                return {tls_error::unexpected_message};
+            auto nst = read_new_session_ticket(nst_r);
+            received_ticket_ = std::move(nst.ticket);
+            transcript.update(nst_frag);
+        }
 
         // Derive fresh key block with new randoms
         auto params = get_cipher_suite_params(negotiated_suite_);

@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace tls {
 
@@ -96,6 +97,12 @@ struct Finished {
     std::array<uint8_t, 12> verify_data{};
 };
 
+// RFC 5077 Section 3.3
+struct NewSessionTicket {
+    uint32_t ticket_lifetime_hint = 0;  // seconds; 0 = unspecified
+    std::vector<uint8_t> ticket;
+};
+
 // --- Extension helpers ---
 
 // Build the ClientHello extensions for ECDHE:
@@ -109,7 +116,8 @@ constexpr void write_client_hello_extensions(
     std::span<const NamedCurve> curves,
     std::span<const SignatureAndHashAlgorithm> sig_algs,
     std::string_view hostname = {},
-    std::span<const std::string_view> alpn_protocols = {})
+    std::span<const std::string_view> alpn_protocols = {},
+    std::span<const uint8_t> session_ticket = {})
 {
     // We'll write extensions into the writer, prefixed with total extensions length.
     // Save position for the outer length, then patch it.
@@ -188,6 +196,15 @@ constexpr void write_client_hello_extensions(
             for (size_t j = 0; j < alpn_protocols[i].size(); ++j)
                 w.write_u8(static_cast<uint8_t>(alpn_protocols[i][j]));
         }
+    }
+
+    // session_ticket (type 35) — RFC 5077
+    // Empty extension = signal support; non-empty = ticket for resumption
+    {
+        w.write_u16(static_cast<uint16_t>(ExtensionType::session_ticket));
+        w.write_u16(static_cast<uint16_t>(session_ticket.size()));
+        if (!session_ticket.empty())
+            w.write_bytes(session_ticket);
     }
 
     // Patch total extensions length
@@ -375,6 +392,39 @@ constexpr Finished read_finished(TlsReader& r) {
     auto data = r.read_bytes(12);
     for (size_t i = 0; i < 12; ++i)
         msg.verify_data[i] = data[i];
+    return msg;
+}
+
+// --- Serialization: NewSessionTicket (RFC 5077) ---
+
+template <size_t Cap>
+void write_new_session_ticket(TlsWriter<Cap>& w, const NewSessionTicket& msg) {
+    size_t hdr_pos = w.position();
+    w.write_u8(static_cast<uint8_t>(HandshakeType::new_session_ticket));
+    w.write_u24(0); // placeholder
+
+    size_t body_start = w.position();
+
+    // ticket_lifetime_hint is 4 bytes big-endian
+    w.write_u16(static_cast<uint16_t>(msg.ticket_lifetime_hint >> 16));
+    w.write_u16(static_cast<uint16_t>(msg.ticket_lifetime_hint & 0xFFFF));
+    w.write_u16(static_cast<uint16_t>(msg.ticket.size()));
+    w.write_bytes(std::span<const uint8_t>(msg.ticket));
+
+    uint32_t body_len = static_cast<uint32_t>(w.position() - body_start);
+    w.patch_u24(hdr_pos + 1, body_len);
+}
+
+// --- Deserialization: NewSessionTicket (RFC 5077) ---
+
+inline NewSessionTicket read_new_session_ticket(TlsReader& r) {
+    NewSessionTicket msg;
+    uint16_t hint_hi = r.read_u16();
+    uint16_t hint_lo = r.read_u16();
+    msg.ticket_lifetime_hint = (static_cast<uint32_t>(hint_hi) << 16) | hint_lo;
+    uint16_t ticket_len = r.read_u16();
+    auto ticket_data = r.read_bytes(ticket_len);
+    msg.ticket.assign(ticket_data.begin(), ticket_data.end());
     return msg;
 }
 

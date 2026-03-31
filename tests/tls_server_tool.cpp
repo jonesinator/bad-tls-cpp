@@ -46,6 +46,7 @@ int main(int argc, char* argv[]) {
     // Parse options
     const char* client_ca_path = nullptr;
     bool require_client_cert = false;
+    bool use_ticket_key = false;
     const char* cert_path = nullptr;
     const char* key_path = nullptr;
     const char* bind_addr_arg = nullptr;
@@ -58,6 +59,9 @@ int main(int argc, char* argv[]) {
             ++i;
         } else if (std::strcmp(argv[i], "--require-client-cert") == 0) {
             require_client_cert = true;
+            ++i;
+        } else if (std::strcmp(argv[i], "--ticket-key") == 0) {
+            use_ticket_key = true;
             ++i;
         } else if (!cert_path) {
             cert_path = argv[i++];
@@ -74,7 +78,7 @@ int main(int argc, char* argv[]) {
 
     if (!cert_path || !key_path) {
         std::fprintf(stderr,
-            "Usage: %s [--client-ca <ca.pem>] [--require-client-cert] "
+            "Usage: %s [--client-ca <ca.pem>] [--require-client-cert] [--ticket-key] "
             "<cert.pem> <key.pem> [bind_addr] [port]\n", argv[0]);
         return 1;
     }
@@ -120,6 +124,15 @@ int main(int argc, char* argv[]) {
         std::printf("Loaded %zu client CA cert(s)\n", client_ca_store.roots.size());
     }
 
+    // Generate random ticket key if requested
+    tls::ticket_key tk{};
+    if (use_ticket_key) {
+        system_random tk_rng;
+        tk.key_name = random_bytes<16>(tk_rng);
+        tk.aes_key = random_bytes<16>(tk_rng);
+        std::printf("Session tickets enabled (random key generated)\n");
+    }
+
     // Start listening
     std::printf("Listening on %s:%u...\n",
         bind_addr.empty() ? "0.0.0.0" : bind_addr.c_str(), port);
@@ -150,6 +163,8 @@ int main(int argc, char* argv[]) {
             cfg.client_ca = &client_ca_store;
             cfg.require_client_cert = require_client_cert;
         }
+        if (use_ticket_key)
+            cfg.session_ticket_key = &tk;
 
         tls::tls_server server(conn, rng, cfg);
         auto result = server.handshake();

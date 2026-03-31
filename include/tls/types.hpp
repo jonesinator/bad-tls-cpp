@@ -40,6 +40,7 @@ enum class HandshakeType : uint8_t {
     client_hello         = 1,
     server_hello         = 2,
     hello_verify_request = 3,   // DTLS — RFC 6347 Section 4.2.1
+    new_session_ticket   = 4,   // RFC 5077
     certificate          = 11,
     server_key_exchange = 12,
     certificate_request = 13,
@@ -139,6 +140,7 @@ enum class ExtensionType : uint16_t {
     signature_algorithms = 13,
     application_layer_protocol_negotiation = 16,  // RFC 7301
     extended_master_secret = 0x0017,  // RFC 7627
+    session_ticket       = 35,  // RFC 5077
     renegotiation_info   = 0xFF01,  // RFC 5746
 };
 
