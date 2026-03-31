@@ -47,7 +47,6 @@ int main(int argc, char* argv[]) {
     const char* client_ca_path = nullptr;
     bool require_client_cert = false;
     bool use_ticket_key = false;
-    bool use_session_cache = false;
     const char* cert_path = nullptr;
     const char* key_path = nullptr;
     const char* bind_addr_arg = nullptr;
@@ -63,9 +62,6 @@ int main(int argc, char* argv[]) {
             ++i;
         } else if (std::strcmp(argv[i], "--ticket-key") == 0) {
             use_ticket_key = true;
-            ++i;
-        } else if (std::strcmp(argv[i], "--session-cache") == 0) {
-            use_session_cache = true;
             ++i;
         } else if (!cert_path) {
             cert_path = argv[i++];
@@ -83,7 +79,7 @@ int main(int argc, char* argv[]) {
     if (!cert_path || !key_path) {
         std::fprintf(stderr,
             "Usage: %s [--client-ca <ca.pem>] [--require-client-cert] [--ticket-key] "
-            "[--session-cache] <cert.pem> <key.pem> [bind_addr] [port]\n", argv[0]);
+            "<cert.pem> <key.pem> [bind_addr] [port]\n", argv[0]);
         return 1;
     }
 
@@ -128,12 +124,6 @@ int main(int argc, char* argv[]) {
         std::printf("Loaded %zu client CA cert(s)\n", client_ca_store.roots.size());
     }
 
-    // Create session cache if requested (persists across connections)
-    tls::session_cache cache;
-    if (use_session_cache) {
-        std::printf("Session ID cache enabled\n");
-    }
-
     // Generate random ticket key if requested
     tls::ticket_key tk{};
     if (use_ticket_key) {
@@ -173,8 +163,6 @@ int main(int argc, char* argv[]) {
             cfg.client_ca = &client_ca_store;
             cfg.require_client_cert = require_client_cert;
         }
-        if (use_session_cache)
-            cfg.session_store = &cache;
         if (use_ticket_key)
             cfg.session_ticket_key = &tk;
 

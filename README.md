@@ -367,10 +367,10 @@ The test suite is comprehensive:
 | `test_private_key.cpp` | EC and RSA private key loading from PKCS#1/PKCS#8 PEM, unified loader auto-detect, sign/verify roundtrip |
 | `ecdsa_tool.cpp` | Standalone ECDSA/ECDH utility |
 | `tls_connect_tool.cpp` | End-to-end TLS client with `--cafile`, `--cert`, `--key` for custom CA and mTLS, `--ticket-file` for session ticket resumption |
-| `tls_server_tool.cpp` | End-to-end TLS server with `--client-ca` and `--require-client-cert` for mTLS, `--ticket-key` for session tickets, `--session-cache` for session ID resumption |
+| `tls_server_tool.cpp` | End-to-end TLS server with `--client-ca` and `--require-client-cert` for mTLS, `--ticket-key` for session tickets |
 | `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites, mTLS with client.badssl.com (RSA client cert) |
-| `test_tls_server.sh` | Server integration test: ECDSA and RSA cipher suites, optional/required mTLS, cross-key-type mTLS (RSA client + ECDSA server and vice versa), session ticket resumption (RFC 5077), session ID and ticket resumption with openssl s_client |
-| `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS, session ticket resumption |
+| `test_tls_server.sh` | Server integration test: ECDSA and RSA cipher suites, optional/required mTLS, cross-key-type mTLS (RSA client + ECDSA server and vice versa), session ticket resumption (RFC 5077) |
+| `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_dtls_record.cpp` | DTLS record framing: 13-byte header, 48-bit sequence numbers, roundtrip serialization |
