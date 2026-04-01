@@ -11,6 +11,7 @@
 #pragma once
 
 #include "connection.hpp"
+#include "keylog.hpp"
 #include "private_key.hpp"
 #include "session_cache.hpp"
 #include <crypto/ecdsa.hpp>
@@ -504,6 +505,7 @@ private:
             master = derive_master_secret<Hash>(pms_span, client_random_, server_random_);
         }
         master_secret_ = master;
+        log_master_secret(client_random_, master_secret_);
 
         auto params = get_cipher_suite_params(negotiated_suite_);
         auto kb = derive_key_block<Hash>(master, client_random_, server_random_, params);
@@ -601,6 +603,7 @@ private:
 
         // Reuse master secret from cached session
         master_secret_ = cached.master_secret;
+        log_master_secret(client_random_, master_secret_);
 
         // Initialize transcript with ClientHello + ServerHello
         TranscriptHash<Hash> transcript;

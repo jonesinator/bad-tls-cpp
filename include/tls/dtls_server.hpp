@@ -12,6 +12,7 @@
 
 #include "dtls_connection.hpp"
 #include "dtls_handshake.hpp"
+#include "keylog.hpp"
 #include "private_key.hpp"
 #include "session_cache.hpp"
 #include <crypto/ecdsa.hpp>
@@ -760,6 +761,7 @@ private:
             std::span<const uint8_t>(pms.data.data(), pms.length),
             client_random_, server_random_);
         master_secret_ = master;
+        log_master_secret(client_random_, master_secret_);
         auto params = get_cipher_suite_params(negotiated_suite_);
         auto kb = derive_key_block<Hash>(master, client_random_, server_random_, params);
 
@@ -837,6 +839,7 @@ private:
 
         // Reuse cached master secret
         master_secret_ = cached.master_secret;
+        log_master_secret(client_random_, master_secret_);
         server_random_ = random_bytes<32>(rng_);
 
         // --- Send ServerHello echoing session_id ---

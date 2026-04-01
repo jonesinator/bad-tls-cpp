@@ -64,6 +64,7 @@ bad-tls-cpp/
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
 │       ├── session_cache.hpp          # Session cache and ticket encryption (RFC 5246, RFC 5077)
+│       ├── keylog.hpp                # SSLKEYLOGFILE support (NSS Key Log Format)
 │       ├── client.hpp                # tls_client handshake state machine
 │       ├── server.hpp                # tls_server handshake state machine
 │       ├── private_key.hpp           # EC and RSA private key loading from PEM
@@ -294,6 +295,10 @@ Defines the `transport` concept for byte-level I/O (`read(span)` → `size_t`, `
 
 `tls_server<Transport, RNG>` performs the server side of a TLS 1.2 ECDHE handshake. `server_config` specifies the certificate chain (DER, leaf first), private key (EC or RSA), cipher suites to offer, optional mTLS settings (`client_ca` trust store and `require_client_cert` flag), optional ALPN protocol names (RFC 7301) for application-layer protocol negotiation, an optional `session_store` for session ID-based resumption (RFC 5246 Section 7.4.1.2), and an optional `session_ticket_key` for stateless session ticket resumption (RFC 5077). When a session cache is configured, the server generates a 32-byte random session ID on full handshakes and stores the session data (master secret, cipher suite, ALPN) for future resumption. When a ticket key is configured, the server encrypts session state into an opaque ticket (AES-128-GCM) and sends it via `NewSessionTicket`; on subsequent connections, the client presents the ticket in its `session_ticket` extension, and the server decrypts it to resume without per-session storage. Ticket-based resumption takes priority over session ID per RFC 5077 Section 3.4. On subsequent connections, if the client presents a valid session ticket or a known session ID (and still offers the cached cipher suite), the server performs an abbreviated handshake: ServerHello → [NewSessionTicket] → CCS → Finished, then receives client CCS → Finished. Supports both ECDSA and RSA server certificates: the server auto-selects cipher suites matching its key type. RSA ServerKeyExchange signatures use RSA-PSS (RFC 8446 Section 4.2.3). When `client_ca` is set, the server sends a CertificateRequest advertising both RSA and ECDSA client certificate types, verifies the client's certificate chain, and validates the CertificateVerify signature (ECDSA, RSA PKCS#1v1.5, or RSA-PSS). `client_authenticated()` reports whether the client presented a valid certificate. Methods mirror `tls_client`: `handshake()`, `send()`, `recv()`, `close()`.
 
+### Key Logging (`tls/keylog.hpp`)
+
+SSLKEYLOGFILE support for Wireshark decryption. When the `SSLKEYLOGFILE` environment variable is set, `log_master_secret()` appends a `CLIENT_RANDOM` line (NSS Key Log Format) after every master secret derivation — full handshakes and session resumption in both TLS and DTLS, client and server. Tools like Wireshark can load the resulting file to decrypt captured traffic.
+
 ### Private Key Loading (`tls/private_key.hpp`)
 
 Loads EC and RSA private keys from PEM files. EC keys: handles SEC 1 format (`EC PRIVATE KEY`, RFC 5915) and PKCS#8 (`PRIVATE KEY`, RFC 5958), auto-detects curve from key byte length. RSA keys: handles PKCS#1 format (`RSA PRIVATE KEY`) and PKCS#8 (`PRIVATE KEY` with RSA OID). The unified `load_private_key()` auto-detects key type from PEM label and PKCS#8 algorithm OID. Returns a `loaded_key` with a `tls_private_key` variant (P-256, P-384, P-521, or RSA) and detected key type.
@@ -394,6 +399,7 @@ The test suite is comprehensive:
 | `dtls_server_tool.cpp` | DTLS server tool with `--client-ca` and `--require-client-cert` for mTLS |
 | `test_dtls_server.sh` | DTLS integration: ECDSA/RSA server keys, optional/required mTLS, cross-key-type mTLS |
 | `test_openssl_interop.sh` | Shell script verifying ECDSA, ECDH, RSA-PSS, and X.509 work with OpenSSL CLI |
+| `capture_wrapper.sh` | Runs a test script under tcpdump + SSLKEYLOGFILE, producing `.pcap` and `.keys` files for Wireshark |
 
 ## Build
 
@@ -415,7 +421,7 @@ A `Containerfile` (Debian sid) provides a reproducible build environment with al
 CONTAINER_CMD=docker ./container-check.sh   # uses docker
 ```
 
-This builds from scratch inside the container and runs the full `check` target (28 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 9 TLS server tests, 4 OpenSSL server interop tests, 8 DTLS integration tests).
+This builds from scratch inside the container and runs the full `check` target (28 unit tests, 99 OpenSSL interop tests, 16 TLS integration tests, 9 TLS server tests, 4 OpenSSL server interop tests, 8 DTLS integration tests). Each integration test runs under `capture_wrapper.sh`, producing packet captures (`.pcap`) and TLS key logs (`.keys`) in `build/captures/`. In CI, these are uploaded as build artifacts for Wireshark analysis.
 
 ## Design Philosophy
 

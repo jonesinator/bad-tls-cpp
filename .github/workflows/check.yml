@@ -17,15 +17,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test in container
+      - name: Build container
         run: |
-          docker build --no-cache -f Containerfile -t asn1-check .
+          docker build --no-cache -f Containerfile --target check -t asn1-check .
 
-      - name: Extract static binary
+      - name: Run tests in container
         run: |
-          container_id=$(docker create asn1-check)
-          docker cp "$container_id:/src/build/tls_connect_tool" tls_connect_tool
-          docker rm "$container_id"
+          docker run --cap-add=NET_RAW --name asn1-run asn1-check
+
+      - name: Extract artifacts
+        if: always()
+        run: |
+          docker cp asn1-run:/src/build/tls_connect_tool tls_connect_tool
+          docker cp asn1-run:/src/build/captures captures || mkdir -p captures
+          docker rm asn1-run
           chmod +x tls_connect_tool
 
       - name: Generate SBOM
@@ -45,3 +50,10 @@ jobs:
         with:
           name: tls_connect_tool-linux-amd64
           path: tls_connect_tool
+
+      - name: Upload packet captures
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packet-captures
+          path: captures/
