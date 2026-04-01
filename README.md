@@ -59,6 +59,7 @@ bad-tls-cpp/
 │       ├── handshake.hpp             # Handshake message structs + serialization
 │       ├── cipher_suite.hpp          # Cipher suite parameters and type-level traits
 │       ├── key_schedule.hpp          # Master secret, key expansion, verify_data
+│       ├── tls13_key_schedule.hpp    # TLS 1.3 key schedule (RFC 8446 §7.1)
 │       ├── record_protection.hpp     # AEAD record encrypt/decrypt (AES-GCM + ChaCha20-Poly1305)
 │       ├── transcript.hpp            # Handshake transcript hash accumulator
 │       ├── transport.hpp             # Transport concept + memory_transport mock
@@ -271,6 +272,10 @@ Supported suites:
 
 Master secret derivation, key block expansion, and Finished verify_data computation using the existing TLS PRF from `crypto/tls_prf.hpp`. `derive_master_secret()` implements RFC 5246 Section 8.1. `derive_extended_master_secret()` implements RFC 7627 (Extended Master Secret), using the session hash instead of client/server randoms — negotiated via the `extended_master_secret` ClientHello extension and required by OpenSSL 3.x for client certificate connections. `derive_key_block()` implements Section 6.3 (note: seed order is reversed vs. master secret derivation). `compute_verify_data()` implements Section 7.4.9.
 
+### TLS 1.3 Key Schedule (`tls/tls13_key_schedule.hpp`)
+
+TLS 1.3 key schedule per RFC 8446 Section 7.1. Provides `hkdf_expand_label()` and `derive_secret()` for the HKDF-based key derivation pipeline, traffic key derivation from secrets, and a staged key schedule struct that progresses through Early, Handshake, and Master secret stages. Templated on any `hash_function`.
+
 ### Record Protection (`tls/record_protection.hpp`)
 
 AEAD record encryption and decryption. AES-GCM (RFC 5288): `build_nonce()` constructs the 12-byte nonce from a 4-byte fixed IV and 8-byte sequence number; wire format is `explicit_nonce || ciphertext || tag`. ChaCha20-Poly1305 (RFC 7905): `build_chacha_nonce()` XORs the 12-byte fixed IV with the padded sequence number; wire format is `ciphertext || tag` (no explicit nonce). Both use the same 13-byte AAD via `build_additional_data()`.
@@ -378,6 +383,7 @@ The test suite is comprehensive:
 | `test_tls_record.cpp` | TlsReader/TlsWriter roundtrips, record framing, incomplete records, sub-readers |
 | `test_tls_handshake.cpp` | ClientHello serialization, ServerHello/Certificate/SKE parsing, Finished roundtrip, session cache store/find/remove/eviction, NewSessionTicket roundtrip, session ticket encrypt/decrypt |
 | `test_tls_key_schedule.cpp` | Master secret derivation, key block expansion, verify_data, transcript hash |
+| `test_tls13_key_schedule.cpp` | TLS 1.3 key schedule (RFC 8446 §7.1) with RFC 8448 test vectors: HKDF-Expand-Label, Derive-Secret, traffic key derivation |
 | `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
 | `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |
 | `test_mozilla_roots.cpp` | Mozilla CA bundle loading (145 roots), subject DER extraction |
