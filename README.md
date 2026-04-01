@@ -61,6 +61,8 @@ bad-tls-cpp/
 │       ├── key_schedule.hpp          # Master secret, key expansion, verify_data
 │       ├── tls13_key_schedule.hpp    # TLS 1.3 key schedule (RFC 8446 §7.1)
 │       ├── record_protection.hpp     # AEAD record encrypt/decrypt (AES-GCM + ChaCha20-Poly1305)
+│       ├── tls13_cipher_suite.hpp    # TLS 1.3 cipher suite parameters and dispatch
+│       ├── tls13_record_protection.hpp # TLS 1.3 AEAD record protection (RFC 8446 §5.2)
 │       ├── transcript.hpp            # Handshake transcript hash accumulator
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
@@ -246,7 +248,7 @@ The TLS module implements TLS 1.2 client and server (RFC 5246): types, binary se
 
 ### Wire Types (`tls/types.hpp`)
 
-Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (X25519, P-256, P-384, P-521), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths.
+Enumerations and value types matching the TLS binary protocol: `ContentType`, `HandshakeType`, `CipherSuite`, `Tls13CipherSuite`, `ProtocolVersion`, `AlertLevel`/`AlertDescription`, `NamedCurve` (X25519, P-256, P-384, P-521), `SignatureAndHashAlgorithm`, `Random`, `SessionId`, and `CompressionMethod`. All are `enum class` with explicit underlying types matching their wire widths. `Tls13CipherSuite` covers TLS 1.3 AEAD cipher suites (AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305).
 
 ### Record Layer (`tls/record.hpp`)
 
@@ -385,6 +387,7 @@ The test suite is comprehensive:
 | `test_tls_key_schedule.cpp` | Master secret derivation, key block expansion, verify_data, transcript hash |
 | `test_tls13_key_schedule.cpp` | TLS 1.3 key schedule (RFC 8446 §7.1) with RFC 8448 test vectors: HKDF-Expand-Label, Derive-Secret, traffic key derivation |
 | `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
+| `test_tls13_record_protection.cpp` | TLS 1.3 record protection: encrypt/decrypt, inner content type, AEAD cipher suites |
 | `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |
 | `test_mozilla_roots.cpp` | Mozilla CA bundle loading (145 roots), subject DER extraction |
 | `test_hostname_verifier.cpp` | Exact/wildcard hostname matching, SAN extraction, CN fallback, verifier integration |
