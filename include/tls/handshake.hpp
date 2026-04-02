@@ -47,10 +47,10 @@ struct ClientHello {
     ProtocolVersion client_version;
     Random random;
     SessionId session_id;
-    asn1::FixedVector<CipherSuite, 32> cipher_suites;
+    asn1::FixedVector<CipherSuite, 128> cipher_suites;
     asn1::FixedVector<CompressionMethod, 4> compression_methods;
     // Extensions serialized as opaque bytes
-    asn1::FixedVector<uint8_t, 512> extensions;
+    asn1::FixedVector<uint8_t, 2048> extensions;
 };
 
 struct ServerHello {

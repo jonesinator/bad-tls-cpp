@@ -67,6 +67,7 @@ bad-tls-cpp/
 │       ├── tls13_handshake.hpp       # TLS 1.3 handshake messages (EncryptedExtensions, Certificate, CertificateVerify, Finished)
 │       ├── tls13_connection.hpp      # TLS 1.3 record I/O with multi-stage key activation
 │       ├── tls13_client.hpp          # TLS 1.3 client handshake state machine (1-RTT ECDHE)
+│       ├── tls13_server.hpp          # TLS 1.3 server handshake state machine (1-RTT ECDHE)
 │       ├── transcript.hpp            # Handshake transcript hash accumulator
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
@@ -408,6 +409,8 @@ The test suite is comprehensive:
 | `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS, session ticket resumption |
 | `tls13_connect_tool.cpp` | End-to-end TLS 1.3 client with `--cafile` for custom CA |
 | `test_tls13_openssl_server.sh` | TLS 1.3 interop: our client against openssl s_server, all 3 cipher suites, X25519/P-256/P-384 groups, ECDSA + RSA certs |
+| `tls13_server_tool.cpp` | End-to-end TLS 1.3 server |
+| `test_tls13_server.sh` | TLS 1.3 server interop: openssl s_client against our server, all 3 cipher suites, X25519/P-256/P-384 groups, ECDSA + RSA certs |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_dtls_record.cpp` | DTLS record framing: 13-byte header, 48-bit sequence numbers, roundtrip serialization |

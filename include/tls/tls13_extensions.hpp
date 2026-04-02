@@ -16,7 +16,9 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace tls {
 
@@ -254,6 +256,103 @@ constexpr void write_key_share_server(TlsWriter<Cap>& w, const KeyShareEntry& en
     w.write_u16(key_len);
     w.write_bytes(std::span<const uint8_t>(
         entry.key_exchange.data.data(), entry.key_exchange.len));
+}
+
+// --- ClientHello extension parsing for TLS 1.3 server ---
+
+struct Tls13ClientHelloExtensions {
+    bool has_supported_versions = false;
+    bool offers_tls13 = false;
+    std::vector<KeyShareEntry> client_shares;
+    std::vector<SignatureScheme> sig_schemes;
+    std::string sni;
+    std::vector<std::string> alpn_protocols;
+};
+
+// Parse TLS 1.3-relevant extensions from a ClientHello extension block.
+// Input: raw extension bytes (the extensions field from ClientHello, after
+// the 2-byte total length has already been consumed by read_client_hello).
+inline Tls13ClientHelloExtensions parse_client_hello_extensions_13(
+    std::span<const uint8_t> ext_data)
+{
+    Tls13ClientHelloExtensions result;
+    TlsReader r(ext_data);
+
+    while (r.remaining() >= 4) {
+        auto ext_type = static_cast<ExtensionType>(r.read_u16());
+        uint16_t ext_len = r.read_u16();
+        if (ext_len > r.remaining()) break;
+
+        if (ext_type == ExtensionType::supported_versions) {
+            // Client: 1-byte list length, then 2 bytes per version
+            auto body = r.sub_reader(ext_len);
+            uint8_t list_len = body.read_u8();
+            size_t count = list_len / 2;
+            for (size_t i = 0; i < count; ++i) {
+                uint8_t major = body.read_u8();
+                uint8_t minor = body.read_u8();
+                if (major == TLS_1_3.major && minor == TLS_1_3.minor) {
+                    result.offers_tls13 = true;
+                }
+            }
+            result.has_supported_versions = true;
+        } else if (ext_type == ExtensionType::key_share) {
+            // Client: 2-byte client_shares length, then list of KeyShareEntry
+            auto body = r.sub_reader(ext_len);
+            uint16_t shares_len = body.read_u16();
+            size_t consumed = 0;
+            while (consumed < shares_len && body.remaining() >= 4) {
+                auto group = static_cast<NamedCurve>(body.read_u16());
+                uint16_t key_len = body.read_u16();
+                consumed += 4 + key_len;
+                auto key_data = body.read_bytes(key_len);
+                // Skip key shares too large for our KeyShareEntry (e.g. hybrid PQ)
+                if (key_len <= 133) {
+                    KeyShareEntry entry;
+                    entry.group = group;
+                    for (size_t i = 0; i < key_len; ++i)
+                        entry.key_exchange.push_back(key_data[i]);
+                    result.client_shares.push_back(std::move(entry));
+                }
+            }
+        } else if (ext_type == ExtensionType::signature_algorithms) {
+            auto body = r.sub_reader(ext_len);
+            uint16_t list_len = body.read_u16();
+            size_t count = list_len / 2;
+            for (size_t i = 0; i < count; ++i)
+                result.sig_schemes.push_back(
+                    static_cast<SignatureScheme>(body.read_u16()));
+        } else if (ext_type == ExtensionType::server_name) {
+            auto body = r.sub_reader(ext_len);
+            uint16_t sni_list_len = body.read_u16();
+            size_t consumed = 0;
+            while (consumed < sni_list_len && body.remaining() >= 3) {
+                uint8_t name_type = body.read_u8();
+                uint16_t name_len = body.read_u16();
+                consumed += 3 + name_len;
+                auto name_data = body.read_bytes(name_len);
+                if (name_type == 0) { // host_name
+                    result.sni = std::string(
+                        reinterpret_cast<const char*>(name_data.data()), name_len);
+                }
+            }
+        } else if (ext_type == ExtensionType::application_layer_protocol_negotiation) {
+            auto body = r.sub_reader(ext_len);
+            uint16_t list_len = body.read_u16();
+            size_t consumed = 0;
+            while (consumed < list_len && body.remaining() > 0) {
+                uint8_t proto_len = body.read_u8();
+                consumed += 1 + proto_len;
+                auto proto_data = body.read_bytes(proto_len);
+                result.alpn_protocols.emplace_back(
+                    reinterpret_cast<const char*>(proto_data.data()), proto_len);
+            }
+        } else {
+            r.read_bytes(ext_len); // skip unknown extensions
+        }
+    }
+
+    return result;
 }
 
 } // namespace tls
