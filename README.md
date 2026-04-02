@@ -53,7 +53,7 @@ bad-tls-cpp/
 │   │   ├── time_verifier.hpp         # Certificate time validation (RFC 5280 §4.1.2.5)
 │   │   ├── key_usage_verifier.hpp    # KeyUsage extension enforcement (RFC 5280 §4.2.1.3)
 │   │   └── basic_constraints_verifier.hpp  # BasicConstraints enforcement (RFC 5280 §4.2.1.9)
-│   └── tls/                          # TLS 1.2 client + server (depends on crypto/ + x509/)
+│   └── tls/                          # TLS 1.2/1.3 client + TLS 1.2 server (depends on crypto/ + x509/)
 │       ├── types.hpp                 # Wire enums, ProtocolVersion, CipherSuite, etc.
 │       ├── record.hpp                # TlsReader/TlsWriter, record framing
 │       ├── handshake.hpp             # Handshake message structs + serialization
@@ -63,6 +63,10 @@ bad-tls-cpp/
 │       ├── record_protection.hpp     # AEAD record encrypt/decrypt (AES-GCM + ChaCha20-Poly1305)
 │       ├── tls13_cipher_suite.hpp    # TLS 1.3 cipher suite parameters and dispatch
 │       ├── tls13_record_protection.hpp # TLS 1.3 AEAD record protection (RFC 8446 §5.2)
+│       ├── tls13_extensions.hpp      # TLS 1.3 extension serialization (supported_versions, key_share)
+│       ├── tls13_handshake.hpp       # TLS 1.3 handshake messages (EncryptedExtensions, Certificate, CertificateVerify, Finished)
+│       ├── tls13_connection.hpp      # TLS 1.3 record I/O with multi-stage key activation
+│       ├── tls13_client.hpp          # TLS 1.3 client handshake state machine (1-RTT ECDHE)
 │       ├── transcript.hpp            # Handshake transcript hash accumulator
 │       ├── transport.hpp             # Transport concept + memory_transport mock
 │       ├── connection.hpp            # Record I/O, SKE verification, ECDH helpers
@@ -388,6 +392,9 @@ The test suite is comprehensive:
 | `test_tls13_key_schedule.cpp` | TLS 1.3 key schedule (RFC 8446 §7.1) with RFC 8448 test vectors: HKDF-Expand-Label, Derive-Secret, traffic key derivation |
 | `test_tls_record_protection.cpp` | Nonce/AAD construction, AES-128/256-GCM encrypt/decrypt, tamper detection, runtime GCM |
 | `test_tls13_record_protection.cpp` | TLS 1.3 record protection: encrypt/decrypt, inner content type, AEAD cipher suites |
+| `test_tls13_extensions.cpp` | TLS 1.3 extension serialization: supported_versions, key_share, signature_algorithms, psk_key_exchange_modes roundtrips |
+| `test_tls13_handshake.cpp` | TLS 1.3 handshake messages: EncryptedExtensions, Certificate, CertificateVerify content, Finished roundtrips |
+| `test_tls13_connection.cpp` | TLS 1.3 record I/O: plaintext/encrypted send/recv, CCS dropping, key reactivation, all cipher suites, handshake reader |
 | `test_tls_client.cpp` | Full ECDHE handshake with memory_transport, certificate/SKE verification, key derivation, encrypted Finished exchange |
 | `test_mozilla_roots.cpp` | Mozilla CA bundle loading (145 roots), subject DER extraction |
 | `test_hostname_verifier.cpp` | Exact/wildcard hostname matching, SAN extraction, CN fallback, verifier integration |
@@ -399,6 +406,8 @@ The test suite is comprehensive:
 | `test_tls_integration.sh` | Integration test: connects to 14 public sites, rejects 2 bad-cert sites, mTLS with client.badssl.com (RSA client cert) |
 | `test_tls_server.sh` | Server integration test: ECDSA and RSA cipher suites, optional/required mTLS, cross-key-type mTLS (RSA client + ECDSA server and vice versa), session ticket resumption (RFC 5077), session ID and ticket resumption with openssl s_client |
 | `test_tls_openssl_server.sh` | Third-party server test: our client against openssl s_server, per cipher suite, TLS + mTLS, session ticket resumption |
+| `tls13_connect_tool.cpp` | End-to-end TLS 1.3 client with `--cafile` for custom CA |
+| `test_tls13_openssl_server.sh` | TLS 1.3 interop: our client against openssl s_server, all 3 cipher suites, X25519/P-256/P-384 groups, ECDSA + RSA certs |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_dtls_record.cpp` | DTLS record framing: 13-byte header, 48-bit sequence numbers, roundtrip serialization |

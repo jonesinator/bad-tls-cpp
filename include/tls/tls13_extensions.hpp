@@ -25,6 +25,7 @@ namespace tls {
 struct KeyShareEntry {
     NamedCurve group;
     asn1::FixedVector<uint8_t, 133> key_exchange; // x25519=32, P-256=65, P-384=97, P-521=133
+    constexpr bool operator==(const KeyShareEntry&) const = default;
 };
 
 // --- Extension writers for ClientHello ---
