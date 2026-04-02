@@ -1,5 +1,5 @@
 /**
- * TLS 1.2 wire-format types — RFC 5246, RFC 4492.
+ * TLS 1.2 / 1.3 wire-format types — RFC 5246, RFC 4492, RFC 8446.
  *
  * Enumerations and value types matching the TLS binary protocol.
  * All types are constexpr and trivially copyable.
@@ -30,24 +30,29 @@ struct ProtocolVersion {
 inline constexpr ProtocolVersion TLS_1_0{3, 1};
 inline constexpr ProtocolVersion TLS_1_1{3, 2};
 inline constexpr ProtocolVersion TLS_1_2{3, 3};
+inline constexpr ProtocolVersion TLS_1_3{3, 4};  // internal only; wire version is TLS_1_2
 
 // DTLS versions use inverted numbering — RFC 6347 Section 4.1
 inline constexpr ProtocolVersion DTLS_1_0{254, 255};  // 0xFEFF
 inline constexpr ProtocolVersion DTLS_1_2{254, 253};  // 0xFEFD
 
-// RFC 5246 Section 7.4
+// RFC 5246 Section 7.4, RFC 8446 Section 4
 enum class HandshakeType : uint8_t {
-    client_hello         = 1,
-    server_hello         = 2,
-    hello_verify_request = 3,   // DTLS — RFC 6347 Section 4.2.1
-    new_session_ticket   = 4,   // RFC 5077
-    certificate          = 11,
-    server_key_exchange = 12,
-    certificate_request = 13,
-    server_hello_done   = 14,
-    certificate_verify  = 15,
-    client_key_exchange = 16,
-    finished            = 20,
+    client_hello          = 1,
+    server_hello          = 2,
+    hello_verify_request  = 3,   // DTLS — RFC 6347 Section 4.2.1
+    new_session_ticket    = 4,   // RFC 5077 / RFC 8446 Section 4.6.1
+    end_of_early_data     = 5,   // RFC 8446 Section 4.5
+    encrypted_extensions  = 8,   // RFC 8446 Section 4.3.1
+    certificate           = 11,
+    server_key_exchange   = 12,
+    certificate_request   = 13,
+    server_hello_done     = 14,
+    certificate_verify    = 15,
+    client_key_exchange   = 16,
+    finished              = 20,
+    key_update            = 24,  // RFC 8446 Section 4.6.3
+    message_hash          = 254, // RFC 8446 Section 4.4.1 (HelloRetryRequest)
 };
 
 // RFC 5246 Section 7.4.1.1, RFC 4492, RFC 7905
@@ -90,7 +95,9 @@ enum class AlertDescription : uint8_t {
     protocol_version        = 70,
     insufficient_security   = 71,
     internal_error          = 80,
-    no_application_protocol = 120,  // RFC 7301
+    missing_extension       = 109, // RFC 8446
+    certificate_required    = 116, // RFC 8446
+    no_application_protocol = 120, // RFC 7301
 };
 
 // RFC 4492 Section 5.1.1, RFC 8422
@@ -130,6 +137,34 @@ constexpr HashAlgorithm rsa_pss_actual_hash(SignatureAndHashAlgorithm alg) noexc
     return static_cast<HashAlgorithm>(static_cast<uint8_t>(alg.signature));
 }
 
+// RFC 8446 Section 4.2.3 — TLS 1.3 uses flat 16-bit signature scheme values.
+enum class SignatureScheme : uint16_t {
+    // ECDSA
+    ecdsa_secp256r1_sha256 = 0x0403,
+    ecdsa_secp384r1_sha384 = 0x0503,
+    ecdsa_secp521r1_sha512 = 0x0603,
+    // RSA-PSS (RSAE = PKCS#1 v1.5 key)
+    rsa_pss_rsae_sha256    = 0x0804,
+    rsa_pss_rsae_sha384    = 0x0805,
+    rsa_pss_rsae_sha512    = 0x0806,
+    // Ed25519 (reserved for future)
+    ed25519                = 0x0807,
+};
+
+// Convert between SignatureScheme and legacy SignatureAndHashAlgorithm.
+// The wire encoding is the same: high byte = hash, low byte = signature.
+constexpr SignatureScheme to_signature_scheme(SignatureAndHashAlgorithm alg) noexcept {
+    return static_cast<SignatureScheme>(
+        (static_cast<uint16_t>(static_cast<uint8_t>(alg.hash)) << 8) |
+        static_cast<uint8_t>(alg.signature));
+}
+
+constexpr SignatureAndHashAlgorithm to_signature_and_hash(SignatureScheme scheme) noexcept {
+    auto v = static_cast<uint16_t>(scheme);
+    return {static_cast<HashAlgorithm>(v >> 8),
+            static_cast<SignatureAlgorithm>(v & 0xFF)};
+}
+
 // RFC 5246 Section 7.4.1.2 — 32 bytes of randomness (caller-provided)
 using Random = std::array<uint8_t, 32>;
 
@@ -157,13 +192,17 @@ enum class ECPointFormat : uint8_t {
 
 // TLS extension types
 enum class ExtensionType : uint16_t {
+    server_name          = 0,     // RFC 6066
     ec_point_formats     = 11,
-    supported_groups     = 10,  // formerly "elliptic_curves"
+    supported_groups     = 10,    // formerly "elliptic_curves"
     signature_algorithms = 13,
-    application_layer_protocol_negotiation = 16,  // RFC 7301
-    extended_master_secret = 0x0017,  // RFC 7627
-    session_ticket       = 35,  // RFC 5077
-    renegotiation_info   = 0xFF01,  // RFC 5746
+    application_layer_protocol_negotiation = 16, // RFC 7301
+    extended_master_secret = 0x0017, // RFC 7627
+    session_ticket       = 35,    // RFC 5077
+    supported_versions   = 43,    // RFC 8446 Section 4.2.1
+    psk_key_exchange_modes = 45,  // RFC 8446 Section 4.2.9
+    key_share            = 51,    // RFC 8446 Section 4.2.8
+    renegotiation_info   = 0xFF01, // RFC 5746
 };
 
 } // namespace tls
