@@ -411,6 +411,7 @@ The test suite is comprehensive:
 | `test_tls13_openssl_server.sh` | TLS 1.3 interop: our client against openssl s_server, all 3 cipher suites, X25519/P-256/P-384 groups, ECDSA + RSA certs |
 | `tls13_server_tool.cpp` | End-to-end TLS 1.3 server |
 | `test_tls13_server.sh` | TLS 1.3 server interop: openssl s_client against our server, all 3 cipher suites, X25519/P-256/P-384 groups, ECDSA + RSA certs |
+| `test_tls13_self_interop.sh` | TLS 1.3 self-interop: our client against our server, ECDSA + RSA certs |
 | `rsa_tool.cpp` | Standalone RSA-PSS sign/verify utility |
 | `x509_tool.cpp` | Standalone X.509 chain verification utility |
 | `test_dtls_record.cpp` | DTLS record framing: 13-byte header, 48-bit sequence numbers, roundtrip serialization |
